@@ -1,10 +1,13 @@
 import { useState } from "react";
 import type { AgentDecisionMsg, IndicatorUpdate, Prediction } from "./types";
+import { useHexData } from "./hooks/useHexData";
+import { HexMap } from "./components/HexMap";
 
 export default function App() {
   const [decisions, _setDecisions] = useState<AgentDecisionMsg[]>([]);
   const [_indicators, _setIndicators] = useState<IndicatorUpdate | null>(null);
   const [_predictions, _setPredictions] = useState<Prediction[]>([]);
+  const { getData, revision } = useHexData();
 
   return (
     <div
@@ -66,16 +69,15 @@ export default function App() {
         )}
       </aside>
 
-      {/* Center: Map placeholder */}
+      {/* Center: Map */}
       <main
         style={{
           background: "#0a0e1a",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
+          position: "relative",
+          overflow: "hidden",
         }}
       >
-        <p style={{ color: "#475569" }}>deck.gl H3 Map</p>
+        <HexMap getData={getData} revision={revision} />
       </main>
 
       {/* Right: Indicators */}
