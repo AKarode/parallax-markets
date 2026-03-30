@@ -1,0 +1,41 @@
+name: iran_hormuz
+description: "Iran/Strait of Hormuz crisis scenario"
+
+tick_duration_minutes: 15
+
+# --- Shipping & Oil Flow ---
+hormuz_daily_flow: 20000000  # bbl/day (IEA estimate)
+saudi_eastwest_pipeline_capacity: 5000000  # bbl/day to Yanbu
+uae_habshan_fujairah_capacity: 1500000  # bbl/day to Gulf of Oman
+total_bypass_capacity_min: 3500000  # bbl/day (IEA low estimate)
+total_bypass_capacity_max: 6500000  # bbl/day (surge capacity)
+
+# --- Rerouting ---
+hormuz_to_europe_via_suez_nm: 6300
+cape_reroute_nm: 11600
+reroute_transit_days_min: 10
+reroute_transit_days_max: 14
+
+# --- Circuit Breaker ---
+max_escalation_per_tick: 1
+escalation_cooldown_ticks: 3
+exogenous_shock_goldstein_threshold: 8.0
+
+# --- Oil Price ---
+oil_price_floor: 30.0
+oil_price_ceiling: 200.0
+
+# --- Budget ---
+daily_budget_cap_usd: 20.0
+sub_actor_max_input_tokens: 4000
+sub_actor_max_output_tokens: 500
+country_agent_max_input_tokens: 8000
+country_agent_max_output_tokens: 1000
+
+# --- Agent Timing ---
+sub_actor_cooldown_minutes: 30
+country_agent_cooldown_minutes: 60
+
+# --- State Management ---
+snapshot_interval_ticks: 100
+delta_retention_days: 30
