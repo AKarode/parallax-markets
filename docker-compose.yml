@@ -1,0 +1,30 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - duckdb-data:/app/data
+    environment:
+      - DUCKDB_PATH=/app/data/parallax.duckdb
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      - EIA_API_KEY=${EIA_API_KEY:-}
+      - PARALLAX_ADMIN_PASSWORD=${PARALLAX_ADMIN_PASSWORD:-admin}
+      - PARALLAX_INVITE_SEED=${PARALLAX_INVITE_SEED:-dev-seed}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  duckdb-data:
