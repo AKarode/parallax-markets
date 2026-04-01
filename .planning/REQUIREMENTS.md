@@ -117,22 +117,22 @@ Deferred to future release. Tracked but not in current roadmap.
 | API-01 | Phase 3 | Pending |
 | API-02 | Phase 3 | Pending |
 | API-03 | Phase 3 | Pending |
-| EVAL-01 | Phase 4 | Pending |
-| EVAL-02 | Phase 4 | Pending |
-| EVAL-03 | Phase 4 | Pending |
-| EVAL-04 | Phase 4 | Pending |
-| EVAL-05 | Phase 4 | Pending |
-| EVAL-06 | Phase 4 | Pending |
-| PROMPT-01 | Phase 5 | Pending |
-| PROMPT-02 | Phase 5 | Pending |
-| PROMPT-03 | Phase 5 | Pending |
-| PROMPT-04 | Phase 5 | Pending |
-| FE-01 | Phase 6 | Pending |
-| FE-02 | Phase 6 | Pending |
-| FE-03 | Phase 6 | Pending |
-| FE-04 | Phase 6 | Pending |
-| FE-05 | Phase 7 | Pending |
-| FE-06 | Phase 7 | Pending |
+| FE-01 | Phase 4 | Pending |
+| FE-02 | Phase 4 | Pending |
+| FE-03 | Phase 4 | Pending |
+| FE-04 | Phase 4 | Pending |
+| EVAL-01 | Phase 5 | Pending |
+| EVAL-02 | Phase 5 | Pending |
+| EVAL-03 | Phase 5 | Pending |
+| EVAL-04 | Phase 5 | Pending |
+| EVAL-05 | Phase 5 | Pending |
+| EVAL-06 | Phase 5 | Pending |
+| FE-05 | Phase 6 | Pending |
+| FE-06 | Phase 6 | Pending |
+| PROMPT-01 | Phase 7 | Pending |
+| PROMPT-02 | Phase 7 | Pending |
+| PROMPT-03 | Phase 7 | Pending |
+| PROMPT-04 | Phase 7 | Pending |
 | ANOM-01 | Phase 8 | Pending |
 | ANOM-02 | Phase 8 | Pending |
 | ANOM-03 | Phase 8 | Pending |
@@ -140,10 +140,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | CAL-02 | Phase 9 | Pending |
 
 **Coverage:**
-- v1 requirements: 35 total
-- Mapped to phases: 35
-- Unmapped: 0 ✓
+- v1 requirements: 34 total
+- Mapped to phases: 34
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-01*
-*Last updated: 2026-04-01 after initial definition*
+*Last updated: 2026-03-30 after roadmap creation*
