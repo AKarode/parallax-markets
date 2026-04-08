@@ -212,6 +212,7 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS signal_ledger (
             signal_id VARCHAR PRIMARY KEY,
+            run_id VARCHAR,
             created_at TIMESTAMP NOT NULL,
             model_id VARCHAR NOT NULL,
             model_claim TEXT NOT NULL,

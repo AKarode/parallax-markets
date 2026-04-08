@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from parallax.prediction.hormuz import HormuzReopeningPredictor
 from parallax.prediction.oil_price import OilPricePredictor
 from parallax.prediction.schemas import PredictionOutput
 from parallax.scoring.ledger import SignalLedger
+from parallax.scoring.prediction_log import PredictionLogger
 from parallax.scoring.tracker import PaperTradeTracker
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.config import ScenarioConfig, load_scenario_config
@@ -195,6 +197,7 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
         Formatted brief as string.
     """
     budget = BudgetTracker(daily_cap_usd=20.0)
+    run_id = str(uuid.uuid4())
 
     if dry_run:
         predictions = _make_dry_run_predictions()
@@ -227,14 +230,29 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
             hormuz_pred.predict(events, world_state),
         ))
 
-    # Initialize contract registry and signal ledger
+    # Initialize contract registry, prediction logger, and signal ledger
     db_path = os.environ.get("DUCKDB_PATH", ":memory:")
     conn = duckdb.connect(db_path)
     create_tables(conn)
     registry = ContractRegistry(conn)
     registry.seed_initial_contracts()
     policy = MappingPolicy(registry=registry, min_effective_edge_pct=5.0)
+    pred_logger = PredictionLogger(conn)
     ledger = SignalLedger(conn)
+
+    # Persist all predictions
+    for pred in predictions:
+        if dry_run:
+            news_ctx: list[dict] = []
+        else:
+            news_ctx = [
+                {"title": e["title"], "url": e["url"], "source": e["source"],
+                 "fetched_at": e.get("published_at", "")}
+                for e in events[:20]
+            ]
+        # cascade_inputs nullable -- ceasefire model has no cascade
+        cascade_ctx = None
+        pred_logger.log_prediction(run_id, pred, news_ctx, cascade_ctx)
 
     # Contract-aware mapping with signal ledger
     all_signals = []
@@ -252,7 +270,7 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
                 if c.ticker == mapping.contract_ticker:
                     contract_title = c.title
                     break
-            signal = ledger.record_signal(pred, mapping, mp, contract_title=contract_title)
+            signal = ledger.record_signal(pred, mapping, mp, contract_title=contract_title, run_id=run_id)
             all_signals.append(signal)
 
     # Convert actionable signals to Divergence objects for existing paper trade + display code
@@ -524,6 +542,16 @@ def main():
         "--verbose", "-v",
         action="store_true",
         help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--check-resolutions",
+        action="store_true",
+        help="Poll Kalshi for settled contracts and backfill outcomes",
+    )
+    parser.add_argument(
+        "--calibration",
+        action="store_true",
+        help="Print calibration report (requires 7+ days of data)",
     )
     args = parser.parse_args()
 

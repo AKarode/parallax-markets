@@ -26,6 +26,7 @@ class SignalRecord(BaseModel):
     """Immutable record of a signal event -- the evaluation ledger entry."""
 
     signal_id: str
+    run_id: str | None = None
     created_at: datetime
     model_id: str
     model_claim: str
@@ -64,6 +65,7 @@ class SignalLedger:
         mapping: MappingResult,
         market_price: MarketPrice,
         contract_title: str | None = None,
+        run_id: str | None = None,
     ) -> SignalRecord:
         """Create and persist a signal record from a mapping evaluation.
 
@@ -97,6 +99,7 @@ class SignalLedger:
 
         record = SignalRecord(
             signal_id=signal_id,
+            run_id=run_id,
             created_at=now,
             model_id=prediction.model_id,
             model_claim=model_claim,
@@ -119,15 +122,16 @@ class SignalLedger:
         self._conn.execute(
             """
             INSERT INTO signal_ledger
-            (signal_id, created_at, model_id, model_claim, model_probability,
+            (signal_id, run_id, created_at, model_id, model_claim, model_probability,
              model_timeframe, model_reasoning, contract_ticker, contract_title,
              proxy_class, confidence_discount, market_yes_price, market_no_price,
              market_volume, raw_edge, effective_edge, signal,
              trade_refused_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 record.signal_id,
+                record.run_id,
                 record.created_at.isoformat(),
                 record.model_id,
                 record.model_claim,
@@ -216,28 +220,29 @@ class SignalLedger:
         """Convert a DuckDB row tuple to a SignalRecord."""
         return SignalRecord(
             signal_id=row[0],
-            created_at=row[1],
-            model_id=row[2],
-            model_claim=row[3],
-            model_probability=row[4],
-            model_timeframe=row[5],
-            model_reasoning=row[6],
-            contract_ticker=row[7],
-            contract_title=row[8],
-            proxy_class=row[9],
-            confidence_discount=row[10],
-            market_yes_price=row[11],
-            market_no_price=row[12],
-            market_volume=row[13],
-            raw_edge=row[14],
-            effective_edge=row[15],
-            signal=row[16],
-            trade_id=row[17],
-            traded=bool(row[18]) if row[18] is not None else False,
-            trade_refused_reason=row[19],
-            resolution_price=row[20],
-            resolved_at=row[21],
-            realized_pnl=row[22],
-            model_was_correct=row[23],
-            proxy_was_aligned=row[24],
+            run_id=row[1],
+            created_at=row[2],
+            model_id=row[3],
+            model_claim=row[4],
+            model_probability=row[5],
+            model_timeframe=row[6],
+            model_reasoning=row[7],
+            contract_ticker=row[8],
+            contract_title=row[9],
+            proxy_class=row[10],
+            confidence_discount=row[11],
+            market_yes_price=row[12],
+            market_no_price=row[13],
+            market_volume=row[14],
+            raw_edge=row[15],
+            effective_edge=row[16],
+            signal=row[17],
+            trade_id=row[18],
+            traded=bool(row[19]) if row[19] is not None else False,
+            trade_refused_reason=row[20],
+            resolution_price=row[21],
+            resolved_at=row[22],
+            realized_pnl=row[23],
+            model_was_correct=row[24],
+            proxy_was_aligned=row[25],
         )
