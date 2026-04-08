@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-03-30)
 Phase: Not started (defining requirements)
 Plan: —
 Status: Defining requirements
-Last activity: 2026-04-07 ��� Milestone v1.0 Kalshi Prediction Market Pivot started
+Last activity: 2026-04-08 - Completed quick task 260408-0ez: Build Kalshi prediction market edge-finder
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -57,11 +57,15 @@ None yet.
 - Ceasefire window: 2 weeks from April 7 — must have paper trading running before it expires
 - Kalshi API auth requires RSA key pair generation from account settings
 - Polymarket technically restricted for US users — read-only data access is fine
-- GDELT ingestion needs adaptation: feed event chains to prediction models, not raw events to 50 agents
-- Cascade engine needs probability output format (not just world state deltas)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260408-0ez | Build Kalshi prediction market edge-finder | 2026-04-08 | 600f21d | [260408-0ez-build-kalshi-prediction-market-edge-find](./quick/260408-0ez-build-kalshi-prediction-market-edge-find/) |
 
 ## Session Continuity
 
-Last session: 2026-03-30
-Stopped at: Roadmap and state initialized
+Last session: 2026-04-08
+Stopped at: Kalshi prediction market edge-finder built — 109 tests passing
 Resume file: None
