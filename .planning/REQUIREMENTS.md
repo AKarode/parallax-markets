@@ -1,149 +1,91 @@
 # Requirements: Parallax
 
-**Defined:** 2026-04-01
-**Core Value:** Predictions that beat human intuition about the Iran-Hormuz crisis — continuously evaluated and improved against ground truth.
+**Defined:** 2026-04-08
+**Core Value:** Find mispriced prediction market contracts by reasoning about second-order cascade effects -- validated via paper trading P&L.
 
 ## v1 Requirements
 
 Requirements for initial release. Each maps to roadmap phases.
 
-### Foundation Hardening
+### Contract Registry (Phase 1)
 
-- [ ] **FOUND-01**: WorldState persistence confirms writes to DuckDB before clearing dirty state
-- [ ] **FOUND-02**: Cascade engine has damping factor to prevent runaway price spirals
-- [ ] **FOUND-03**: Shared Pydantic contracts defined for cross-module communication (events, decisions, predictions)
-- [ ] **FOUND-04**: All 10 feature branches integrated into a single working codebase
+- [ ] **REG-01**: Contract registry in DuckDB stores ticker, source, event_ticker, title, resolution_criteria, resolution_date, is_active for every tracked contract
+- [ ] **REG-02**: Proxy classification per model type (ProxyClass enum: DIRECT, NEAR_PROXY, LOOSE_PROXY, NONE) stored in contract_proxy_map table
+- [ ] **REG-03**: MappingPolicy replaces `_map_predictions_to_markets()` -- evaluates all contracts for each prediction, applies confidence discount by proxy class, refuses NONE mappings
+- [ ] **REG-04**: Signal ledger persists every signal (model claim, contract mapped, proxy class, market state, trade decision, resolution outcome) as append-only records
+- [ ] **REG-05**: Pipeline integration -- `brief.py` uses MappingPolicy + SignalLedger instead of heuristic ticker matching
 
-### Pipeline Integration
+### Prediction Persistence (Phase 2)
 
-- [ ] **PIPE-01**: Async EventBus decouples all modules via publish/subscribe within single process
-- [ ] **PIPE-02**: TickOrchestrator owns tick lifecycle: receive events, route to agents, validate via circuit breaker, run cascade, flush deltas
-- [ ] **PIPE-03**: GDELT poller runs on 15-minute cadence, publishes curated events to EventBus
-- [ ] **PIPE-04**: EIA oil price poller runs on schedule, publishes price updates to EventBus
-- [ ] **PIPE-05**: Agent runner subscribes to events, produces structured decisions and predictions
-- [ ] **PIPE-06**: End-to-end flow works: GDELT event arrives → agents deliberate → cascade runs → world state updates → data persisted
+- [ ] **PERS-01**: Every PredictionOutput (probability, reasoning, news context, cascade inputs) persisted in DuckDB with timestamp and run_id
+- [ ] **PERS-02**: Resolution checker polls Kalshi/Polymarket APIs for settled contracts, backfills signal_ledger with resolution_price and realized_pnl
+- [ ] **PERS-03**: Calibration queries: hit rate by proxy class, calibration curve by probability bucket, edge decay by effective_edge bucket
+- [ ] **PERS-04**: At least 7 days of prediction data accumulated before calibration analysis is considered valid
 
-### Backend API
+### Paper Trading Evaluation (Phase 3)
 
-- [ ] **API-01**: FastAPI REST endpoints serve current world state, agent decisions, predictions, and indicators on page load
-- [ ] **API-02**: WebSocket endpoint pushes tick-batched deltas (world state changes, new decisions, indicator updates) to connected clients
-- [ ] **API-03**: Health endpoint reports pipeline status (last GDELT fetch, last tick, agent budget remaining)
+- [ ] **TRAD-01**: Paper trades tracked at contract level with entry_price, resolution_price, realized_pnl, hold_duration
+- [ ] **TRAD-02**: P&L segmented by proxy_class -- DIRECT, NEAR_PROXY, LOOSE_PROXY reported separately
+- [ ] **TRAD-03**: Summary report: total P&L, win rate, avg edge at entry, Sharpe-like ratio, statistical significance test
 
-### Eval Framework
+### Deployment Fixes (Phase 4)
 
-- [ ] **EVAL-01**: Agent predictions parsed into structured schema (direction, magnitude, timeframe, confidence) and persisted
-- [ ] **EVAL-02**: Ground truth fetcher resolves predictions against EIA oil prices and GDELT event outcomes
-- [ ] **EVAL-03**: Brier score computed for probabilistic predictions; direction and magnitude accuracy scored separately
-- [ ] **EVAL-04**: Daily eval cron automatically scores all predictions past their resolve_by date
-- [ ] **EVAL-05**: Agent prompt versions tracked — each prediction linked to the prompt version that produced it
-- [ ] **EVAL-06**: Eval results queryable by agent, time range, prediction type
+- [ ] **DEPLOY-01**: `docker compose up` starts backend, health check passes within 30 seconds
+- [ ] **DEPLOY-02**: FastAPI GET endpoints (`/api/predictions`, `/api/markets`, `/api/divergences`, `/api/trades`) return real pipeline data
+- [ ] **DEPLOY-03**: API failure handling: retry with exponential backoff for Kalshi/GDELT/EIA rate limits, fallback to cached data
+- [ ] **DEPLOY-04**: Structured logging (JSON) with run_id correlation across pipeline stages
 
-### Prompt Improvement
+### Second Thesis (Phase 5)
 
-- [ ] **PROMPT-01**: Automated identification of worst-performing agents based on eval scores
-- [ ] **PROMPT-02**: Meta-LLM generates prompt patches for underperforming agents
-- [ ] **PROMPT-03**: A/B testing of new prompt vs old prompt with automatic winner promotion
-- [ ] **PROMPT-04**: Prompt improvement respects $20/day budget (meta-LLM calls included in budget)
-
-### Frontend Data Binding
-
-- [ ] **FE-01**: Agent Activity panel shows real agent decisions with actor name, reasoning summary, and timestamp
-- [ ] **FE-02**: Live Indicators panel shows real oil prices, Hormuz traffic flow, pipeline bypass capacity, escalation index
-- [ ] **FE-03**: H3 hex map colors and elevation reflect real world state (influence zones, threat levels)
-- [ ] **FE-04**: Timeline panel shows simulation event history with scrubbing
-- [ ] **FE-05**: Prediction timeline shows scrollable history of predictions with outcomes and scores
-- [ ] **FE-06**: Cascade trace visualization shows effect chains (event → flow change → price impact → bypass activation)
-
-### Anomaly Detection
-
-- [ ] **ANOM-01**: Sliding window z-score on GDELT event frequency by actor pair detects unusual spikes
-- [ ] **ANOM-02**: Alert banner surfaces in frontend when anomaly threshold exceeded
-- [ ] **ANOM-03**: Anomaly events logged and available in prediction context for agents
-
-### Calibration
-
-- [ ] **CAL-01**: Calibration curve computed: bucket predictions by stated confidence, compute actual hit rate per bucket
-- [ ] **CAL-02**: Calibration visualization rendered in frontend eval dashboard
-
-## v2 Requirements
-
-Deferred to future release. Tracked but not in current roadmap.
-
-### Advanced Simulation
-
-- **SIM-01**: Counterfactual simulation — fork current state, inject hypothetical event, run N ticks, diff outcomes
-- **SIM-02**: Scenario comparison dashboard — side-by-side view of current trajectory vs escalation vs de-escalation
-
-### Enhanced Intelligence
-
-- **INT-01**: Confidence-weighted ensemble aggregation across agents (Parallax consensus prediction)
-- **INT-02**: Per-agent accuracy leaderboard with historical trend
-- **INT-03**: Source attribution linking predictions to specific GDELT events that triggered them
-
-### Infrastructure
-
-- **INFRA-01**: Multi-user auth and access control
-- **INFRA-02**: Cloud deployment (beyond local Docker Compose)
-- **INFRA-03**: Multi-scenario support (Ukraine, Taiwan, etc.)
+- [ ] **THESIS-01**: Framework for adding new thesis domains: new prediction model + contract registry entries + proxy classifications
+- [ ] **THESIS-02**: At least one additional thesis domain (e.g., energy macro, US election, crypto regulation) with active contracts
+- [ ] **THESIS-03**: New model integrated into existing pipeline (brief.py, divergence detector, paper trader)
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Multi-user authentication | Single-analyst tool for v1 |
+| 50-agent swarm | Replaced by 3 focused prediction models -- killed April 2026 |
+| H3 spatial visualization / deck.gl map | Deleted -- CLI tool does not need maps |
+| Frontend dashboard | Deleted -- CLI-first, API endpoints for future UI |
+| WebSocket real-time updates | Not needed for CLI tool |
+| EventBus / TickOrchestrator | Never built -- pipeline is sequential |
+| Multi-user authentication | Single-analyst tool |
+| Real-money trading | Paper trading only until edge is proven via P&L |
+| Mobile app | Desktop CLI only |
+| More than 3 prediction models for Iran thesis | Focus on quality over quantity |
 | Free-text predictions | Cannot be scored automatically; structured output only |
-| Real-time LLM streaming to frontend | 50 agents creates noise; batch completed decisions instead |
-| Manual prediction scoring | Automated ground truth resolution; no human-in-the-loop scoring |
-| More than 50 agents | Focus on making existing agents better, not adding more |
-| Mobile app | Desktop web only |
-| External notifications (email, SMS, push) | Single-user local tool; in-app alerts sufficient |
-| Historical backfill UI | REPLAY mode stays as dev/debug tool |
-| Explanation generation via separate LLM calls | Agents already provide reasoning; don't double LLM costs |
+| Latency arbitrage | Edge is reasoning depth, not speed |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 1 | Pending |
-| FOUND-02 | Phase 1 | Pending |
-| FOUND-03 | Phase 1 | Pending |
-| FOUND-04 | Phase 1 | Pending |
-| PIPE-01 | Phase 2 | Pending |
-| PIPE-02 | Phase 2 | Pending |
-| PIPE-03 | Phase 2 | Pending |
-| PIPE-04 | Phase 2 | Pending |
-| PIPE-05 | Phase 2 | Pending |
-| PIPE-06 | Phase 2 | Pending |
-| API-01 | Phase 3 | Pending |
-| API-02 | Phase 3 | Pending |
-| API-03 | Phase 3 | Pending |
-| FE-01 | Phase 4 | Pending |
-| FE-02 | Phase 4 | Pending |
-| FE-03 | Phase 4 | Pending |
-| FE-04 | Phase 4 | Pending |
-| EVAL-01 | Phase 5 | Pending |
-| EVAL-02 | Phase 5 | Pending |
-| EVAL-03 | Phase 5 | Pending |
-| EVAL-04 | Phase 5 | Pending |
-| EVAL-05 | Phase 5 | Pending |
-| EVAL-06 | Phase 5 | Pending |
-| FE-05 | Phase 6 | Pending |
-| FE-06 | Phase 6 | Pending |
-| PROMPT-01 | Phase 7 | Pending |
-| PROMPT-02 | Phase 7 | Pending |
-| PROMPT-03 | Phase 7 | Pending |
-| PROMPT-04 | Phase 7 | Pending |
-| ANOM-01 | Phase 8 | Pending |
-| ANOM-02 | Phase 8 | Pending |
-| ANOM-03 | Phase 8 | Pending |
-| CAL-01 | Phase 9 | Pending |
-| CAL-02 | Phase 9 | Pending |
+| REG-01 | Phase 1 | Pending |
+| REG-02 | Phase 1 | Pending |
+| REG-03 | Phase 1 | Pending |
+| REG-04 | Phase 1 | Pending |
+| REG-05 | Phase 1 | Pending |
+| PERS-01 | Phase 2 | Pending |
+| PERS-02 | Phase 2 | Pending |
+| PERS-03 | Phase 2 | Pending |
+| PERS-04 | Phase 2 | Pending |
+| TRAD-01 | Phase 3 | Pending |
+| TRAD-02 | Phase 3 | Pending |
+| TRAD-03 | Phase 3 | Pending |
+| DEPLOY-01 | Phase 4 | Pending |
+| DEPLOY-02 | Phase 4 | Pending |
+| DEPLOY-03 | Phase 4 | Pending |
+| DEPLOY-04 | Phase 4 | Pending |
+| THESIS-01 | Phase 5 | Pending |
+| THESIS-02 | Phase 5 | Pending |
+| THESIS-03 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 34 total
-- Mapped to phases: 34
+- v1 requirements: 19 total
+- Mapped to phases: 19
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-04-01*
-*Last updated: 2026-03-30 after roadmap creation*
+*Requirements defined: 2026-04-08*
+*Last updated: 2026-04-08 after architecture pivot and dead code pruning*
