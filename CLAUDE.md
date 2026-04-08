@@ -3,17 +3,63 @@
 
 **Parallax**
 
-A live geopolitical intelligence tool that simulates the Iran/Hormuz crisis in real-time. It ingests real-world news (GDELT, EIA oil prices), feeds them to 50 AI agents representing actual decision-makers (IRGC, CENTCOM, MBS/Aramco, CCP/PLA, etc.), models cascade effects (blockade → oil flow → price shock → bypass → insurance), and scores predictions against reality daily. Built for a single analyst tracking the Iran-USA situation as it unfolds.
+A prediction market edge-finder for the Iran-Hormuz crisis. Ingests real-world news (Google News RSS, GDELT DOC API, EIA oil prices), runs 3 focused AI prediction models (oil price, ceasefire, Hormuz reopening) with cascade reasoning, compares predictions against Kalshi/Polymarket market prices, and flags divergences as trade signals. Validated via paper trading on Kalshi sandbox.
 
-**Core Value:** Predictions that beat human intuition about what happens next in the Iran-Hormuz crisis — continuously evaluated and improved against ground truth.
+**Core Value:** Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects faster and deeper than headline-scraping bots.
+
+### How It Works
+
+```
+News (Google RSS + GDELT) → 3 Prediction Models (Claude Sonnet) → Probabilities
+Kalshi/Polymarket APIs    → Market Prices                        → Probabilities
+                                                                        ↓
+                                                          Divergence Detector
+                                                    BUY_YES / BUY_NO / HOLD signals
+                                                                        ↓
+                                                          Paper Trading (Kalshi sandbox)
+```
+
+### Running
+
+```bash
+# Dry run (mock data, no API calls)
+cd backend && python -m parallax.cli.brief --dry-run
+
+# Live predictions + real market prices, no trades
+python -m parallax.cli.brief --no-trade
+
+# Full pipeline with paper trade execution
+python -m parallax.cli.brief
+
+# FastAPI server
+uvicorn parallax.main:app --reload
+```
 
 ### Constraints
 
-- **Budget**: $20/day cap on LLM calls for agent swarm — enforced by budget tracker with auto-degrade
-- **Tech stack**: Python/FastAPI backend, React/Vite/TypeScript frontend, DuckDB, H3/deck.gl — established
-- **Data sources**: GDELT (15min cadence), EIA API v2 — already integrated
+- **Budget**: $20/day cap on LLM calls — 3 Sonnet calls ~$0.02/run, massive headroom
+- **Tech stack**: Python/FastAPI backend, DuckDB — established. Frontend minimal (CLI-first).
+- **Data sources**: Google News RSS (free, 5-15min), GDELT DOC API (free, 15-60min), EIA API v2, Kalshi API, Polymarket API
 - **Deployment**: Docker Compose locally — no cloud infra for v1
-- **Timeline**: Crisis is unfolding now — sooner this works end-to-end, the more valuable it is
+- **Timeline**: 2-week ceasefire window (April 7-21 2026) is the validation deadline
+- **Trading**: Paper trading only via Kalshi sandbox. No real money until edge is proven.
+
+### Environment Variables
+
+```bash
+ANTHROPIC_API_KEY        # Required — Claude API for prediction models
+KALSHI_API_KEY           # Required — Kalshi API key ID
+KALSHI_PRIVATE_KEY_PATH  # Required — Path to RSA private key PEM file (~/.kalshi/private_key.pem)
+EIA_API_KEY              # Optional — EIA oil price data
+```
+
+### Kalshi API Notes
+
+- **Two endpoints**: Production (`api.elections.kalshi.com`) for reading real market prices, Demo (`demo-api.kalshi.co`) for paper trading
+- Demo sandbox does NOT have geopolitical markets — only sports/crypto
+- Auth: RSA-PSS signature on every request (timestamp + method + path)
+- v2 API uses `_dollars` suffix fields (e.g., `yes_bid_dollars`, `volume_fp`)
+- Market discovery: use `event_ticker` parameter, not unfiltered `/markets`
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:codebase/STACK.md -->
@@ -173,93 +219,64 @@ A live geopolitical intelligence tool that simulates the Iran/Hormuz crisis in r
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
-## Pattern Overview
-- Event-driven simulation using priority queue with wall-clock anchoring (LIVE mode) or instant playback (REPLAY mode)
-- Spatial computation via H3 hexagonal grid at multiple resolutions (ocean, regional, chokepoint, infrastructure)
-- Deterministic rule-based cascade propagation for economic effects (blockade → flow loss → price shock → downstream impacts)
-- Single-writer queue pattern for DuckDB persistence to prevent race conditions
-- Configuration-driven scenario parameters (no hard-coded simulation rules)
-## Layers
-- Purpose: Discrete event simulation core with priority queue, event scheduling, and async event handling
-- Location: `backend/src/parallax/simulation/engine.py`
-- Contains: `SimulationEngine` class, `SimEvent` dataclass, `ClockMode` enum (LIVE/REPLAY)
-- Depends on: asyncio, heapq
-- Used by: Cascade engine, world state manager, future agent decision points
-- Purpose: Deterministic rule-based event propagation (blockade → flow → price → downstream effects)
-- Location: `backend/src/parallax/simulation/cascade.py`
-- Contains: `CascadeEngine` class with 6 chained rules, `ReroutePenalty` dataclass
-- Depends on: `WorldState`, `ScenarioConfig`
-- Used by: Event handlers in simulation loop
-- Purpose: Prevents runaway escalation and enforces reality bounds
-- Location: `backend/src/parallax/simulation/circuit_breaker.py`
-- Contains: `CircuitBreaker` class with escalation rate limiting, cooldown tracking, reality checks
-- Depends on: None (pure logic)
-- Used by: Agent decision validation (Phase 2)
-- Purpose: In-memory representation of geopolitical world with delta tracking for efficient persistence
-- Location: `backend/src/parallax/simulation/world_state.py`
-- Contains: `WorldState` class with cell-level state, `CellState` dataclass
-- Depends on: None (pure datastructures)
-- Used by: Cascade engine, database writer
-- Purpose: Parameterize all simulation rules without code changes (shipping capacity, price bounds, agent budgets, etc.)
-- Location: `backend/src/parallax/simulation/config.py`
-- Contains: `ScenarioConfig` frozen dataclass, `load_scenario_config()` loader
-- Depends on: YAML parser (pyyaml)
-- Used by: Cascade engine, circuit breaker, initialization logic
-- Purpose: H3 hexagonal grid operations and multi-resolution handling
-- Location: `backend/src/parallax/spatial/h3_utils.py`
-- Contains: `ResolutionBand` dataclass, functions for lat/lng→H3 conversion, route→H3 chain conversion
-- Depends on: h3 library
-- Used by: Ingest pipelines, world state initialization
-- Purpose: Define persistent schema for world state, decisions, predictions, events
-- Location: `backend/src/parallax/db/schema.py`
-- Contains: `create_tables()` function that creates 10 tables (world_state_delta, world_state_snapshot, decisions, predictions, curated_events, raw_gdelt, agent_memory, agent_prompts, eval_results, simulation_state)
-- Depends on: duckdb
-- Used by: Initialization, queries
-- Purpose: Single-writer asynchronous queue pattern for DuckDB to prevent concurrent write contention
-- Location: `backend/src/parallax/db/writer.py`
-- Contains: `DbWriter` class, `WriteOp` dataclass
-- Depends on: asyncio, duckdb
-- Used by: Event handlers, state persistence
-- Purpose: Read-only query functions for simulation state reconstruction and event history
-- Location: `backend/src/parallax/db/queries.py`
-- Contains: Functions for current tick, latest snapshot, world state at tick, recent decisions
-- Depends on: duckdb
-- Used by: API endpoints, state initialization
-## Data Flow
-- **In-Memory:** `WorldState` tracks all H3 cells with current state (influence, threat_level, flow, status)
-- **Persistence Strategy:** Delta-based approach
-- **Write Pattern:** Async single-writer queue (`DbWriter`) ensures no race conditions on DuckDB
-## Key Abstractions
-- Purpose: Represents a single discrete event at a given tick
-- Examples: `SimEvent(tick=100, event_type="blockade", payload={"cell_id": 1234, "reduction_pct": 0.95})`
-- Pattern: Dataclass with tick, event_type, payload dict, source, engine reference
-- Purpose: In-memory world model with change tracking
-- Examples: `ws.update_cell(cell_id, flow=5000000, status="restricted")` marks cell dirty for later persistence
-- Pattern: Dictionary-backed storage with dirty set for delta calculation
-- Purpose: Pure, stateless rule application
-- Examples: `cascade.apply_blockade(ws, cell_id, 0.9)` modifies world state and returns effects
-- Pattern: Methods take world state as parameter, return effect dictionaries
-- Purpose: Immutable configuration container
-- Examples: `config.hormuz_daily_flow`, `config.oil_price_ceiling`, `config.max_escalation_per_tick`
-- Pattern: Frozen dataclass loaded from YAML, computed properties for derived values
-## Entry Points
-- Location: Will be in `backend/src/parallax/main.py` (not yet created)
-- Triggers: FastAPI endpoint or CLI command
-- Responsibilities: Load config, create engine, schedule events, run simulation, return results
-- Location: TBD in main.py
-- Triggers: Engine pops each event from queue
-- Responsibilities: Apply cascade rules, update world state, potentially schedule follow-up events
-- Location: Runs as async task via `DbWriter.run()`
-- Triggers: Async queue receives `WriteOp` items
-- Responsibilities: Serialize pending writes, execute SQL, handle errors
-## Error Handling
-- **Cascade operations:** Methods return early with zero impact if inputs invalid (e.g., `apply_blockade()` returns `{"supply_loss": 0.0}` if cell not found)
-- **Database writes:** Errors logged but don't stop engine; writes go to error log
-- **Circuit breaker:** Returns `False` for disallowed escalations (does not raise)
-- **Config loading:** Validation via Pydantic when `ScenarioConfig` is instantiated; invalid YAML fails at load time
-## Cross-Cutting Concerns
-- Config validation via Pydantic dataclass defaults and frozen constraint
-- World state updates via `WorldState.update_cell()` with optional parameters (NoneType means no change)
+### Module Map (backend/src/parallax/)
+
+| Module | Purpose | Key Classes/Functions |
+|--------|---------|---------------------|
+| `cli/brief.py` | **Main entry point** — daily intelligence brief CLI | `run_brief()`, `_map_predictions_to_markets()` |
+| `main.py` | FastAPI REST API (6 endpoints) | `/api/health`, `/api/predictions`, `/api/markets`, `/api/divergences`, `/api/trades`, `/api/brief/run` |
+| `ingestion/google_news.py` | Google News RSS poller (free, 5-15min) | `fetch_google_news()`, `NewsEvent` |
+| `ingestion/gdelt_doc.py` | GDELT DOC 2.0 API poller (free, 15-60min) | `fetch_gdelt_docs()` |
+| `ingestion/gdelt.py` | GDELT BigQuery pipeline (4-stage filter) | `volume_gate()`, `structural_dedup()` |
+| `ingestion/oil_prices.py` | EIA API v2 fetcher (Brent/WTI) | `fetch_brent()`, `fetch_wti()` |
+| `ingestion/entities.py` | 30+ critical entity list for filtering | `matches_critical_entity()` |
+| `ingestion/dedup.py` | Semantic dedup (sentence-transformers) | `SemanticDeduplicator` |
+| `markets/kalshi.py` | Kalshi API client (RSA-PSS auth) | `KalshiClient`, `IRAN_EVENT_TICKERS` |
+| `markets/polymarket.py` | Polymarket read-only client | `PolymarketClient` |
+| `markets/schemas.py` | Shared market data models | `MarketPrice`, `Orderbook`, `Position`, `PaperTrade` |
+| `prediction/oil_price.py` | Oil price direction predictor | `OilPricePredictor` (cascade + LLM) |
+| `prediction/ceasefire.py` | Ceasefire probability predictor | `CeasefirePredictor` (LLM) |
+| `prediction/hormuz.py` | Hormuz reopening predictor | `HormuzReopeningPredictor` (cascade + LLM) |
+| `prediction/schemas.py` | Prediction output model | `PredictionOutput` |
+| `divergence/detector.py` | Model vs market comparison | `DivergenceDetector`, `Divergence` |
+| `scoring/tracker.py` | Paper trade tracking + P&L | `PaperTradeTracker`, `TradeRecord` |
+| `budget/tracker.py` | $20/day LLM budget enforcement | `BudgetTracker` |
+| `agents/schemas.py` | Agent output Pydantic models | `AgentPrediction`, `AgentDecision` |
+| `agents/runner.py` | LLM execution with prompt caching | `AgentRunner` |
+| `simulation/cascade.py` | 6-rule cascade engine | `CascadeEngine` (blockade→flow→bypass→price→downstream→insurance) |
+| `simulation/engine.py` | Discrete event simulation | `SimulationEngine`, `SimEvent`, `ClockMode` |
+| `simulation/world_state.py` | In-memory world state | `WorldState`, `CellState` |
+| `simulation/config.py` | YAML scenario config | `ScenarioConfig`, `load_scenario_config()` |
+| `simulation/circuit_breaker.py` | Escalation limiter | `CircuitBreaker` |
+| `db/schema.py` | DuckDB schema (12 tables) | `create_tables()` |
+| `db/writer.py` | Async single-writer queue | `DbWriter` |
+| `db/queries.py` | Read-only query functions | `get_world_state_at_tick()` |
+| `spatial/h3_utils.py` | H3 hexagonal grid ops | `lat_lng_to_cell_for_zone()` |
+
+### Data Flow
+
+```
+Google News RSS ──┐                                    Kalshi Prod API ──┐
+                  ├→ News Events → 3 Prediction Models                   ├→ Market Prices
+GDELT DOC API ────┘     │              │                Polymarket API ───┘       │
+                        │        Claude Sonnet                                   │
+EIA Oil Prices ─────────┘              │                                         │
+                                       ↓                                         ↓
+                              PredictionOutput ──→ Ticker Mapping ──→ DivergenceDetector
+                                                                            │
+                                                                   BUY_YES / BUY_NO / HOLD
+                                                                            │
+                                                                   Paper Trade (Kalshi Demo)
+```
+
+### Key Gotchas
+
+- **Kalshi Demo vs Production**: Demo has sports/crypto only. Use production for market reads, demo for paper trades.
+- **Kalshi API v2 fields**: Use `yes_bid_dollars` (float 0-1), NOT `yes_bid` (old cents format). Same for `volume_fp`.
+- **Ticker mapping**: Predictions don't hardcode tickers. `_map_predictions_to_markets()` in brief.py maps at runtime.
+- **AsyncAnthropic**: Always use `anthropic.AsyncAnthropic()` (not `Anthropic()`) since all prediction code is async.
+- **GDELT DOC rate limits**: Gets 429 frequently. Google News RSS is the reliable primary source.
+- **Env vars across processes**: Claude Code shell doesn't share env with user terminal. Use `/tmp/parallax-env.sh` pattern.
 <!-- GSD:architecture-end -->
 
 <!-- GSD:workflow-start source:GSD defaults -->
