@@ -2,74 +2,70 @@
 
 ## What This Is
 
-A prediction market edge-finder for the Iran-Hormuz crisis. Ingests real-world events (GDELT, EIA oil prices), runs focused AI prediction models with structured causal reasoning (cascade engine), compares predictions against Kalshi/Polymarket market prices, and flags divergences where the model disagrees with market consensus. Validated via paper trading on Kalshi sandbox. Built for a single trader/analyst exploiting second-order effects that sentiment bots miss.
+A prediction market edge-finder for the Iran-Hormuz crisis. Ingests real-world news (Google News RSS, GDELT DOC API, EIA oil prices), runs 3 focused AI prediction models (oil price, ceasefire, Hormuz reopening) with cascade reasoning, compares predictions against Kalshi/Polymarket market prices, and flags divergences as trade signals. Validated via paper trading on Kalshi sandbox. Built for a single trader/analyst exploiting second-order effects that sentiment bots miss.
 
 ## Core Value
 
-Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects (blockade → flow → price → insurance) faster and deeper than headline-scraping bots.
+Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects (blockade -> flow -> price -> insurance) faster and deeper than headline-scraping bots.
 
-## Current Milestone: v1.0 Kalshi Prediction Market Pivot
+## Current Milestone: v1.1 Contract Alignment + Evaluation
 
-**Goal:** Ship a prediction market edge-finder validated via paper trading within the 2-week ceasefire window.
+**Goal:** The edge-finder is built and runs end-to-end. Next step is making it trustworthy: formal proposition alignment between model predictions and tradeable contracts, persistent evaluation data, and provable P&L.
 
 **Target features:**
-- GDELT ingestion feeding structured event data to prediction models
-- Kalshi + Polymarket API integration (read market prices, orderbooks)
-- 3 focused prediction models: oil price direction, ceasefire probability, Hormuz reopening timeline
-- Cascade reasoning engine generating second-order predictions
-- Divergence detection: flag when model predictions disagree with market prices
-- Daily intelligence brief output (CLI or simple web view)
-- Paper trading via Kalshi sandbox to validate edge
-- Scoring loop: track prediction accuracy against market resolution
+- Contract registry with proxy classification (DIRECT / NEAR_PROXY / LOOSE_PROXY / NONE) per model type
+- Mapping policy replacing heuristic `_map_predictions_to_markets()` with structured proxy-aware decision logic
+- Prediction persistence with full provenance (model claim, reasoning, news context, cascade state)
+- Signal ledger recording every signal with contract mapping, proxy class, market state, and trade decision
+- Paper trading evaluation at contract level with P&L segmented by proxy class
+- FastAPI endpoint hydration (return real pipeline data, not empty responses)
+- Second thesis expansion (new prediction domains beyond Iran/Hormuz)
 
 ## Requirements
 
 ### Validated
 
-- ✓ DuckDB schema (10 tables) for world state, agents, predictions, eval — existing
-- ✓ Single-writer DbWriter with asyncio.Queue → DuckDB — existing
-- ✓ YAML scenario config loader for Hormuz cascade parameters — existing
-- ✓ H3 spatial utilities with 4 resolution bands (ocean/regional/chokepoint/infrastructure) — existing
-- ✓ World state manager with in-memory cache, dirty-set delta tracking, snapshot/restore — existing
-- ✓ Simulation engine: DES with heapq, live/replay clock modes — existing
-- ✓ Cascade engine: 6 parameterized rules (blockade→flow→bypass→price→downstream→insurance) — existing
-- ✓ Circuit breaker: max 1 escalation/tick, 3-tick cooldown, exogenous shock override — existing
-- ✓ GDELT ingestion pipeline: 4-stage noise filter, 30+ named entities, structural dedup — existing
-- ✓ Semantic dedup with sentence-transformers at 0.90 threshold — existing
-- ✓ EIA API v2 oil price fetcher (Brent + WTI) — existing
-- ✓ Agent swarm: 50 agents across 12 countries, Pydantic schemas, registry — existing
-- ✓ Event→agent router with keyword-based relevance matching — existing
-- ✓ Agent runner with parallel LLM calls, Anthropic prompt caching, model tiering — existing
-- ✓ Budget tracker with $20/day cap, per-model pricing, cooldown, auto-degrade — existing
-- ✓ React + Vite + TypeScript frontend scaffold — existing
-- ✓ deck.gl + MapLibre H3 hex map with influence colors, threat elevation — existing
-- ✓ WebSocket hook with JSON batch parsing and auto-reconnect — existing
-- ✓ 3-column dashboard layout (Agent Activity, Map, Live Indicators) — existing
-- ✓ Docker setup: backend + frontend Dockerfiles, docker-compose with DuckDB volume — existing
+- DuckDB schema (12 tables) + single-writer DbWriter with asyncio.Queue
+- YAML scenario config loader for Hormuz cascade parameters
+- Cascade engine: 6 parameterized rules (blockade -> flow -> bypass -> price -> downstream -> insurance)
+- Google News RSS poller (primary news source, free, 5-15min)
+- GDELT DOC 2.0 API poller (secondary news source, free, 15-60min)
+- EIA API v2 oil price fetcher (Brent + WTI)
+- 3 prediction models: OilPricePredictor, CeasefirePredictor, HormuzReopeningPredictor (Claude Sonnet)
+- Kalshi API client with RSA-PSS auth (production reads, demo paper trades)
+- Polymarket read-only client
+- DivergenceDetector comparing model vs market-implied probabilities
+- PaperTradeTracker for paper trade P&L tracking
+- BudgetTracker with $20/day cap, per-model pricing, auto-degrade
+- CLI entry point (`parallax.cli.brief`) running full pipeline: news -> predict -> market -> diverge -> trade
+- FastAPI server with 6 endpoints (stub -- not hydrated with real data)
+- Docker Compose for backend
+- 120 tests passing
 
 ### Active
 
-- [ ] Kalshi API client: read markets, orderbooks, prices; paper trade via sandbox
-- [ ] Polymarket API client: read geopolitical/oil market prices as probability benchmarks
-- [ ] 3 focused prediction models: oil price direction, ceasefire probability, Hormuz reopening timeline
-- [ ] Cascade reasoning engine adapted for prediction market outputs (probability + confidence)
-- [ ] Divergence detector: compare model predictions vs market-implied probabilities, flag mispricing
-- [ ] Daily intelligence brief: CLI output comparing model vs market with actionable trade signals
-- [ ] Scoring loop: track predictions against market resolution, compute P&L on paper trades
-- [ ] GDELT ingestion adapted for prediction model input (event chains, not raw events)
+- [ ] Contract registry in DuckDB with proxy classification per model type (Phase 1)
+- [ ] Mapping policy replacing heuristic ticker matching with structured proxy-aware logic (Phase 1)
+- [ ] Signal ledger persisting every signal with full provenance (Phase 1)
+- [ ] Prediction persistence with calibration queries (Phase 2)
+- [ ] Paper trading evaluation with contract-level P&L by proxy class (Phase 3)
+- [ ] Deployment hardening: Docker health checks, API hydration, error handling (Phase 4)
+- [ ] Second thesis expansion beyond Iran/Hormuz (Phase 5)
 
 ### Out of Scope
 
-- 50-agent swarm — replaced by 3 focused prediction models
-- H3 spatial visualization / deck.gl map — not needed for prediction market tool
-- Full frontend dashboard — CLI-first, simple web view later
-- Multi-scenario support (other conflicts) — Iran/Hormuz only for v1
-- User authentication / multi-user — single analyst tool
-- Mobile app — desktop web only
-- Historical replay UI — backend supports replay mode but no UI needed yet
-- Public deployment — runs locally via Docker
-- Real-money trading — paper trading only for v1, prove edge first
-- Latency arbitrage — competing on speed is not our edge
+- 50-agent swarm (replaced by 3 focused prediction models -- killed April 2026)
+- H3 spatial visualization / deck.gl map (deleted -- CLI tool does not need maps)
+- Frontend dashboard (deleted -- CLI-first, API endpoints for future UI)
+- WebSocket real-time updates (not needed for CLI tool)
+- EventBus / TickOrchestrator (never built -- pipeline is sequential)
+- Semantic dedup with sentence-transformers (deleted -- Google News RSS provides clean enough input)
+- Multi-user authentication (single-analyst tool)
+- Mobile app
+- Real-money trading (paper trading only until edge is proven via P&L)
+- Latency arbitrage (edge is reasoning depth, not speed)
+- Multi-scenario support (other conflicts) for v1 -- Phase 5 handles expansion
+- Historical replay UI (backend supports replay mode but no UI needed)
 
 ## Context
 
@@ -78,51 +74,48 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - Oil prices: Brent hit $118 Q1 2026, currently $96-113. Largest inflation-adjusted spike since 1988.
 - Kalshi/Polymarket: $200M+ traded on Iran war outcomes. Active markets on ceasefire, Hormuz reopening, oil prices.
 - 30%+ of Polymarket wallets are AI bots. 14/20 most profitable wallets are bots. Edge is in reasoning depth, not speed.
-- 10 feature branches exist (feat/01 through feat/10) — reusable: GDELT ingestion, cascade engine, DuckDB, budget tracker
-- Kill list: 50-agent swarm, H3 spatial viz, full frontend dashboard — too much infrastructure for the opportunity window
-- Kalshi API: full REST + WebSocket, paper trading sandbox at demo-api.kalshi.co, free market data reads
-- Polymarket: deeper geopolitical liquidity (5-10x Kalshi), public API, crypto-based (read-only for US)
-- Codebase map available at `.planning/codebase/`
+- Dead code pruning completed April 8 2026: deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/h3_utils.py, ingestion/gdelt.py (BigQuery), ingestion/dedup.py, db/queries.py, frontend/ directory, 3 dead test files. 120 tests still passing.
+- Codebase is now lean: 3 prediction models, 2 market clients, 2 news ingestors, 1 cascade engine, 1 divergence detector, CLI + FastAPI entry points.
 
 ## Constraints
 
-- **Budget**: $20/day cap on LLM calls — 3 Sonnet calls ~$0.30/day leaves massive headroom for deeper analysis
-- **Tech stack**: Python/FastAPI backend, DuckDB — established. Frontend minimal (CLI-first)
-- **Data sources**: GDELT (15min cadence), EIA API v2, Kalshi API, Polymarket API — free reads
-- **Deployment**: Docker Compose locally — no cloud infra for v1
-- **Timeline**: 2-week ceasefire window (April 7-21 2026) is the validation deadline. Ship or miss the window.
+- **Budget**: $20/day cap on LLM calls -- 3 Sonnet calls ~$0.02/run, massive headroom
+- **Tech stack**: Python/FastAPI backend, DuckDB -- established. CLI-first.
+- **Data sources**: Google News RSS (free, 5-15min), GDELT DOC API (free, 15-60min), EIA API v2, Kalshi API, Polymarket API
+- **Deployment**: Docker Compose locally -- no cloud infra for v1
+- **Timeline**: 2-week ceasefire window (April 7-21 2026) is the validation deadline
 - **Trading**: Paper trading only via Kalshi sandbox. No real money until edge is proven.
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| DuckDB over Postgres | Embedded, zero-config, fast analytical queries, single-writer fits the model | ✓ Good |
-| H3 hexagonal grid | Uniform spatial indexing, multi-resolution (ocean→infrastructure), deck.gl native support | ✓ Good |
-| 50 agents across 12 countries | Covers major actors in Hormuz crisis (Iran, USA, Saudi, China, UAE, etc.) with sub-actors (IRGC, CENTCOM, Aramco) | ✗ Killed — replaced by 3 focused prediction models |
-| Anthropic prompt caching + model tiering | Haiku for routine, Sonnet for escalation — keeps under $20/day | ⚠️ Revisit — Sonnet-only now, 3 deep calls |
-| Semantic dedup at 0.90 threshold | Validated over 0.85 — tighter threshold reduces noise without losing distinct events | ✓ Good |
-| Parallel feature branches | Each subsystem developed independently — needs integration pass | ⚠️ Revisit — cherry-pick reusable modules only |
-| Pivot to prediction markets | 50-agent simulation too slow to ship; Kalshi/Polymarket provide built-in eval (P&L) and the crisis is active NOW | — Pending |
-| 3 focused models over swarm | Structured causal reasoning on oil/ceasefire/Hormuz beats shallow sentiment at 1/100th the cost | — Pending |
-| Paper trading first | Prove edge before risking capital. Kalshi sandbox is free. | — Pending |
+| DuckDB over Postgres | Embedded, zero-config, fast analytical queries, single-writer fits the model | Good |
+| 3 focused models over 50-agent swarm | Structured causal reasoning on oil/ceasefire/Hormuz beats shallow sentiment at 1/100th the cost | Good -- killed swarm April 2026 |
+| CLI-first over frontend dashboard | Ship faster, prove edge via paper trading P&L, defer UI until edge is proven | Good -- deleted frontend April 8 2026 |
+| Google News RSS as primary over GDELT BigQuery | Free, faster (5-15min vs 15-60min), no GCP credentials needed, cleaner signal | Good -- deleted BigQuery pipeline April 8 2026 |
+| Dead code pruning April 8 2026 | Deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/, ingestion/gdelt.py, ingestion/dedup.py, db/queries.py, frontend/ | Good -- 120 tests still pass, codebase is focused |
+| Kalshi production for reads, demo for trades | Demo sandbox has no geopolitical markets (only sports/crypto) | Good |
+| Paper trading first | Prove edge before risking capital. Kalshi sandbox is free. | Good |
+| Cascade engine retained | 6-rule parameterized cascade (blockade -> flow -> bypass -> price -> downstream -> insurance) provides second-order reasoning that prediction models use | Good |
+| Anthropic prompt caching | Sonnet-only now, 3 deep calls per run. ~$0.02/run vs $20/day budget. | Good |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 **After each phase transition** (via `/gsd:transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
+1. Requirements invalidated? -> Move to Out of Scope with reason
+2. Requirements validated? -> Move to Validated with phase reference
+3. New requirements emerged? -> Add to Active
+4. Decisions to log? -> Add to Key Decisions
+5. "What This Is" still accurate? -> Update if drifted
 
 **After each milestone** (via `/gsd:complete-milestone`):
 1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
+2. Core Value check -- still the right priority?
+3. Audit Out of Scope -- reasons still valid?
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-07 after v1.0 Kalshi Prediction Market Pivot*
+*Last updated: 2026-04-08 after dead code pruning and planning doc rewrite*
