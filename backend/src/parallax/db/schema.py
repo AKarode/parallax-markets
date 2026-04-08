@@ -165,3 +165,29 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             fetched_at TIMESTAMP NOT NULL
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contract_registry (
+            ticker VARCHAR PRIMARY KEY,
+            source VARCHAR NOT NULL,
+            event_ticker VARCHAR NOT NULL,
+            title VARCHAR NOT NULL,
+            resolution_criteria TEXT NOT NULL,
+            resolution_date TIMESTAMP,
+            is_active BOOLEAN DEFAULT true,
+            last_checked TIMESTAMP,
+            metadata JSON
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contract_proxy_map (
+            ticker VARCHAR NOT NULL,
+            model_type VARCHAR NOT NULL,
+            proxy_class VARCHAR NOT NULL,
+            confidence_discount DOUBLE NOT NULL DEFAULT 1.0,
+            invert_probability BOOLEAN DEFAULT false,
+            notes TEXT,
+            PRIMARY KEY (ticker, model_type)
+        )
+    """)
