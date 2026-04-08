@@ -314,6 +314,35 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
     return brief
 
 
+async def _run_check_resolutions() -> None:
+    """Poll Kalshi production API for settled contracts and backfill signal_ledger."""
+    from parallax.scoring.resolution import check_resolutions
+
+    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+    conn = duckdb.connect(db_path)
+    create_tables(conn)
+
+    api_key = os.environ.get("KALSHI_API_KEY", "")
+    pk_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+    if not api_key or not pk_path:
+        print("ERROR: KALSHI_API_KEY and KALSHI_PRIVATE_KEY_PATH required for resolution checking")
+        conn.close()
+        return
+
+    PROD_URL = "https://api.elections.kalshi.com/trade-api/v2"
+    client = KalshiClient(api_key=api_key, private_key_path=pk_path, base_url=PROD_URL)
+    results = await check_resolutions(conn, client)
+
+    if results:
+        print(f"Resolved {len(results)} contract(s):")
+        for r in results:
+            print(f"  {r.get('ticker', '?')}: {r.get('result', '?')} (settlement: {r.get('resolution_price', '?')})")
+    else:
+        print("No contracts have settled since last check.")
+
+    conn.close()
+
+
 def _map_predictions_to_markets_legacy(
     predictions: list[PredictionOutput],
     market_prices: list[MarketPrice],
@@ -559,6 +588,10 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.WARNING)
+
+    if args.check_resolutions:
+        asyncio.run(_run_check_resolutions())
+        return
 
     asyncio.run(run_brief(dry_run=args.dry_run, no_trade=args.no_trade))
 

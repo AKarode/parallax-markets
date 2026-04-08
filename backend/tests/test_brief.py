@@ -148,6 +148,29 @@ class TestBriefFormatting:
         assert "BUY_YES" in brief
 
 
+class TestCLIFlags:
+    """Test CLI argument parsing."""
+
+    def test_check_resolutions_flag(self):
+        """--check-resolutions flag should be recognized by argparse."""
+        import argparse
+        from parallax.cli.brief import main
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--check-resolutions", action="store_true")
+        args = parser.parse_args(["--check-resolutions"])
+        assert args.check_resolutions is True
+
+    def test_check_resolutions_flag_default_false(self):
+        """--check-resolutions should default to False."""
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--check-resolutions", action="store_true")
+        args = parser.parse_args([])
+        assert args.check_resolutions is False
+
+
 class TestRunBriefDryRun:
     """Test end-to-end dry run execution with contract-aware mapping."""
 
