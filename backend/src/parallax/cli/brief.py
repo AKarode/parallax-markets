@@ -21,8 +21,14 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import duckdb
+
 from parallax.budget.tracker import BudgetTracker
-from parallax.divergence.detector import DivergenceDetector
+from parallax.contracts.mapping_policy import MappingPolicy
+from parallax.contracts.registry import ContractRegistry
+from parallax.contracts.schemas import MappingResult
+from parallax.db.schema import create_tables
+from parallax.divergence.detector import Divergence, DivergenceDetector
 from parallax.markets.kalshi import KalshiClient
 from parallax.markets.polymarket import PolymarketClient
 from parallax.markets.schemas import MarketPrice
@@ -30,6 +36,7 @@ from parallax.prediction.ceasefire import CeasefirePredictor
 from parallax.prediction.hormuz import HormuzReopeningPredictor
 from parallax.prediction.oil_price import OilPricePredictor
 from parallax.prediction.schemas import PredictionOutput
+from parallax.scoring.ledger import SignalLedger
 from parallax.scoring.tracker import PaperTradeTracker
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.config import ScenarioConfig, load_scenario_config
@@ -56,7 +63,6 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
             reasoning="Cascade analysis shows 2.5M bbl/day supply loss. Bypass capacity partially offsets but net loss drives Brent up $3-8.",
             evidence=["Hormuz flow restricted to 60%", "IRGC naval exercises ongoing"],
             created_at=now,
-            kalshi_ticker="KXOIL",
         ),
         PredictionOutput(
             model_id="ceasefire",
@@ -70,7 +76,6 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
             reasoning="Oman-mediated talks showing progress. Both sides signaling willingness but military posture unchanged.",
             evidence=["Oman mediation active", "US-Iran indirect talks confirmed"],
             created_at=now,
-            kalshi_ticker="KXIRANCEASEFIRE",
         ),
         PredictionOutput(
             model_id="hormuz_reopening",
@@ -84,19 +89,18 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
             reasoning="Partial reopening possible if ceasefire holds. Insurance rates still elevated, suggesting market skepticism.",
             evidence=["Naval de-escalation signals", "Insurance premiums stabilizing"],
             created_at=now,
-            kalshi_ticker="KXCLOSEHORMUZ",
         ),
     ]
 
 
 def _make_dry_run_markets() -> list[MarketPrice]:
-    """Generate mock market prices for --dry-run mode."""
+    """Generate mock market prices for --dry-run mode using registry tickers."""
     now = datetime.now(timezone.utc)
     return [
-        MarketPrice(ticker="KXOIL", source="kalshi", yes_price=0.55, no_price=0.45, volume=12000, fetched_at=now),
-        MarketPrice(ticker="KXIRANCEASEFIRE", source="kalshi", yes_price=0.48, no_price=0.52, volume=8500, fetched_at=now),
-        MarketPrice(ticker="KXCLOSEHORMUZ", source="kalshi", yes_price=0.60, no_price=0.40, volume=15000, fetched_at=now),
-        MarketPrice(ticker="iran-ceasefire-2026", source="polymarket", yes_price=0.51, no_price=0.49, volume=250000, fetched_at=now),
+        MarketPrice(ticker="KXWTIMAX-26DEC31", source="kalshi", yes_price=0.55, no_price=0.45, volume=12000, fetched_at=now),
+        MarketPrice(ticker="KXUSAIRANAGREEMENT-27", source="kalshi", yes_price=0.48, no_price=0.52, volume=8500, fetched_at=now),
+        MarketPrice(ticker="KXCLOSEHORMUZ-27JAN", source="kalshi", yes_price=0.60, no_price=0.40, volume=15000, fetched_at=now),
+        MarketPrice(ticker="KXWTIMIN-26DEC31", source="kalshi", yes_price=0.30, no_price=0.70, volume=5000, fetched_at=now),
     ]
 
 
@@ -106,6 +110,7 @@ def _format_brief(
     divergences: list,
     budget: BudgetTracker,
     trade_table: str = "",
+    signals: list | None = None,
 ) -> str:
     """Format the intelligence brief as structured text."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -163,6 +168,18 @@ def _format_brief(
         lines.append(trade_table)
         lines.append("")
 
+    lines.append("--- SIGNAL AUDIT ---")
+    lines.append("")
+    if signals:
+        for sig in signals:
+            status = sig.signal
+            proxy = sig.proxy_class
+            lines.append(f"  {sig.contract_ticker:<30} {sig.model_id:<18} {proxy:<12} {sig.effective_edge:>+6.1%}  {status}")
+        lines.append("")
+    else:
+        lines.append("  No signals evaluated.")
+        lines.append("")
+
     lines.append("=" * 52)
     return "\n".join(lines)
 
@@ -210,12 +227,55 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
             hormuz_pred.predict(events, world_state),
         ))
 
-    # Map predictions to market tickers for divergence detection
-    predictions = _map_predictions_to_markets(predictions, market_prices)
+    # Initialize contract registry and signal ledger
+    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+    conn = duckdb.connect(db_path)
+    create_tables(conn)
+    registry = ContractRegistry(conn)
+    registry.seed_initial_contracts()
+    policy = MappingPolicy(registry=registry, min_effective_edge_pct=5.0)
+    ledger = SignalLedger(conn)
 
-    # Detect divergences
-    detector = DivergenceDetector(min_edge_pct=5.0)
-    divergences = detector.detect(predictions, market_prices)
+    # Contract-aware mapping with signal ledger
+    all_signals = []
+    for pred in predictions:
+        mappings = policy.evaluate(pred, market_prices)
+        for mapping in mappings:
+            # Find matching market price for this contract
+            mp = next((m for m in market_prices if m.ticker == mapping.contract_ticker), None)
+            if mp is None:
+                continue
+            # Find contract title from registry
+            contract_title = None
+            active = registry.get_active_contracts()
+            for c in active:
+                if c.ticker == mapping.contract_ticker:
+                    contract_title = c.title
+                    break
+            signal = ledger.record_signal(pred, mapping, mp, contract_title=contract_title)
+            all_signals.append(signal)
+
+    # Convert actionable signals to Divergence objects for existing paper trade + display code
+    divergences = []
+    for sig in all_signals:
+        if sig.signal in ("BUY_YES", "BUY_NO"):
+            pred_match = next((p for p in predictions if p.model_id == sig.model_id), None)
+            mp_match = next((m for m in market_prices if m.ticker == sig.contract_ticker), None)
+            if pred_match and mp_match:
+                pred_match.kalshi_ticker = sig.contract_ticker
+                div = Divergence(
+                    model_id=sig.model_id,
+                    prediction=pred_match,
+                    market_price=mp_match,
+                    model_probability=sig.model_probability,
+                    market_probability=sig.market_yes_price,
+                    edge=sig.effective_edge,
+                    edge_pct=sig.effective_edge * 100,
+                    signal=sig.signal,
+                    strength="strong" if abs(sig.effective_edge) > 0.15 else "moderate" if abs(sig.effective_edge) > 0.10 else "weak",
+                    created_at=sig.created_at,
+                )
+                divergences.append(div)
 
     # Paper trades
     trade_table = ""
@@ -231,22 +291,16 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
             trade_table = tracker.to_table()
 
     # Format and output
-    brief = _format_brief(predictions, market_prices, divergences, budget, trade_table)
+    brief = _format_brief(predictions, market_prices, divergences, budget, trade_table, signals=all_signals)
     print(brief)
     return brief
 
 
-def _map_predictions_to_markets(
+def _map_predictions_to_markets_legacy(
     predictions: list[PredictionOutput],
     market_prices: list[MarketPrice],
 ) -> list[PredictionOutput]:
-    """Map each prediction to the most relevant Kalshi market ticker.
-
-    Matching rules:
-    - ceasefire/hormuz_reopening → KXUSAIRANAGREEMENT (US-Iran deal, closest proxy)
-    - oil_price direction=decrease → KXWTIMAX (model thinks price won't hit target)
-    - oil_price direction=increase → KXWTIMAX (model thinks price will hit target)
-    """
+    """DEPRECATED: Legacy heuristic mapping. Replaced by MappingPolicy in Phase 1. Kept for reference."""
     # Index markets by ticker prefix for fast lookup
     markets_by_prefix: dict[str, list[MarketPrice]] = {}
     for mp in market_prices:
