@@ -16,6 +16,7 @@ dependencies = [
     "searoute>=1.3",
     "shapely>=2.0",
     "google-cloud-bigquery>=3.27",
+    "cryptography>=44.0",
 ]
 
 [project.optional-dependencies]
