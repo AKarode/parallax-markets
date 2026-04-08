@@ -236,7 +236,7 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
 def _init_anthropic():
     """Initialize Anthropic client from env."""
     import anthropic
-    return anthropic.Anthropic()
+    return anthropic.AsyncAnthropic()
 
 
 def _load_config() -> ScenarioConfig:
@@ -251,14 +251,55 @@ def _load_config() -> ScenarioConfig:
 
 
 async def _fetch_gdelt_events() -> list[dict]:
-    """Fetch recent GDELT events. Gracefully degrades if no BigQuery credentials."""
+    """Fetch recent news events from Google News RSS + GDELT DOC API."""
+    from parallax.ingestion.google_news import fetch_google_news
+    from parallax.ingestion.gdelt_doc import fetch_gdelt_docs
+
+    events = []
+    seen: set[str] = set()
+
+    # Fetch from both sources in parallel
     try:
-        from google.cloud import bigquery
-        # Would fetch from BigQuery here
-        logger.info("BigQuery GDELT fetch not yet wired — returning empty events")
-    except ImportError:
-        logger.info("google-cloud-bigquery not available, skipping GDELT fetch")
-    return []
+        gn_events, gdelt_events = await asyncio.gather(
+            fetch_google_news(seen_hashes=seen),
+            fetch_gdelt_docs(timespan="24h", seen_hashes=seen),
+            return_exceptions=True,
+        )
+        if isinstance(gn_events, list):
+            events.extend(gn_events)
+            seen.update(e.event_hash for e in gn_events)
+        else:
+            logger.warning("Google News fetch failed: %s", gn_events)
+        if isinstance(gdelt_events, list):
+            # Dedup against Google News results
+            for e in gdelt_events:
+                if e.event_hash not in seen:
+                    events.append(e)
+                    seen.add(e.event_hash)
+        else:
+            logger.warning("GDELT DOC fetch failed: %s", gdelt_events)
+    except Exception:
+        logger.exception("Failed to fetch news events")
+
+    logger.info(
+        "Fetched %d news events (%d Google News, %d GDELT DOC)",
+        len(events),
+        sum(1 for e in events if e.source == "google_news"),
+        sum(1 for e in events if e.source == "gdelt_doc"),
+    )
+
+    # Convert NewsEvent to dict format expected by prediction models
+    return [
+        {
+            "title": e.title,
+            "url": e.url,
+            "source": e.source,
+            "published_at": e.published_at.isoformat(),
+            "snippet": e.snippet,
+            "query": e.query,
+        }
+        for e in events
+    ]
 
 
 async def _fetch_oil_prices() -> list[dict]:
@@ -282,18 +323,32 @@ async def _fetch_kalshi_markets() -> list[MarketPrice]:
     if not api_key or not pk_path:
         logger.warning("Kalshi credentials not set, skipping market fetch")
         return []
+    # Use production API for market data (demo only has sports/crypto)
+    PROD_URL = "https://api.elections.kalshi.com/trade-api/v2"
     try:
-        client = KalshiClient(api_key=api_key, private_key_path=pk_path)
-        from parallax.markets.kalshi import HORMUZ_SERIES, OIL_PRICE_SERIES
-        markets = await client.get_markets()
+        client = KalshiClient(
+            api_key=api_key, private_key_path=pk_path, base_url=PROD_URL,
+        )
+        from parallax.markets.kalshi import IRAN_EVENT_TICKERS
         prices = []
-        for m in markets[:20]:
-            ticker = m.get("ticker", "")
+        # Fetch markets for each known event ticker
+        for event_ticker in IRAN_EVENT_TICKERS:
             try:
-                price = await client.get_market_price(ticker)
-                prices.append(price)
+                data = await client._request(
+                    "GET", "/markets",
+                    params={"event_ticker": event_ticker, "limit": 10},
+                )
+                markets = data.get("markets", [])
+                for m in markets:
+                    if m.get("status") not in ("open", "active"):
+                        continue
+                    ticker = m.get("ticker", "")
+                    if ticker and not any(p.ticker == ticker for p in prices):
+                        price = await client.get_market_price(ticker)
+                        if price.yes_price > 0 or price.no_price > 0:
+                            prices.append(price)
             except Exception:
-                continue
+                logger.debug("Failed to fetch event %s", event_ticker)
         return prices
     except Exception:
         logger.exception("Failed to fetch Kalshi markets")
