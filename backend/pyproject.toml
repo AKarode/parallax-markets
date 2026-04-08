@@ -26,6 +26,9 @@ dev = [
     "pytest-httpx>=0.35,<0.36",
 ]
 
+[project.scripts]
+parallax-brief = "parallax.cli.brief:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

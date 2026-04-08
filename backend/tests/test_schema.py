@@ -16,6 +16,8 @@ def test_create_tables_creates_all_expected_tables(db):
         "raw_gdelt",
         "eval_results",
         "simulation_state",
+        "paper_trades",
+        "market_prices",
     }
     assert expected == table_names
 

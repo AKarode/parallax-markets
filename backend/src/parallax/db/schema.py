@@ -136,3 +136,32 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             updated_at TIMESTAMP DEFAULT current_timestamp
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trades (
+            trade_id VARCHAR PRIMARY KEY,
+            ticker VARCHAR NOT NULL,
+            side VARCHAR NOT NULL,
+            quantity INTEGER NOT NULL,
+            entry_price DOUBLE NOT NULL,
+            current_price DOUBLE,
+            exit_price DOUBLE,
+            pnl DOUBLE DEFAULT 0,
+            status VARCHAR DEFAULT 'open',
+            opened_at TIMESTAMP NOT NULL,
+            closed_at TIMESTAMP,
+            divergence_edge DOUBLE NOT NULL,
+            model_id VARCHAR NOT NULL
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS market_prices (
+            ticker VARCHAR NOT NULL,
+            source VARCHAR NOT NULL,
+            yes_price DOUBLE,
+            no_price DOUBLE,
+            volume DOUBLE,
+            fetched_at TIMESTAMP NOT NULL
+        )
+    """)
