@@ -210,6 +210,9 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
             hormuz_pred.predict(events, world_state),
         ))
 
+    # Map predictions to market tickers for divergence detection
+    predictions = _map_predictions_to_markets(predictions, market_prices)
+
     # Detect divergences
     detector = DivergenceDetector(min_edge_pct=5.0)
     divergences = detector.detect(predictions, market_prices)
@@ -231,6 +234,89 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
     brief = _format_brief(predictions, market_prices, divergences, budget, trade_table)
     print(brief)
     return brief
+
+
+def _map_predictions_to_markets(
+    predictions: list[PredictionOutput],
+    market_prices: list[MarketPrice],
+) -> list[PredictionOutput]:
+    """Map each prediction to the most relevant Kalshi market ticker.
+
+    Matching rules:
+    - ceasefire/hormuz_reopening → KXUSAIRANAGREEMENT (US-Iran deal, closest proxy)
+    - oil_price direction=decrease → KXWTIMAX (model thinks price won't hit target)
+    - oil_price direction=increase → KXWTIMAX (model thinks price will hit target)
+    """
+    # Index markets by ticker prefix for fast lookup
+    markets_by_prefix: dict[str, list[MarketPrice]] = {}
+    for mp in market_prices:
+        # Extract prefix: "KXUSAIRANAGREEMENT-27-26MAY" → "KXUSAIRANAGREEMENT"
+        parts = mp.ticker.split("-")
+        prefix = parts[0]
+        markets_by_prefix.setdefault(prefix, []).append(mp)
+
+    for pred in predictions:
+        if pred.kalshi_ticker:
+            continue  # Already mapped
+
+        if pred.model_id == "ceasefire":
+            # Map to US-Iran agreement — closest proxy for ceasefire holding
+            # Prefer the nearest-term open market (highest urgency)
+            candidates = markets_by_prefix.get("KXUSAIRANAGREEMENT", [])
+            if candidates:
+                # Pick the one with most volume (most liquid = best price)
+                best = max(candidates, key=lambda m: m.volume)
+                pred.kalshi_ticker = best.ticker
+
+        elif pred.model_id == "hormuz_reopening":
+            # Map to Hormuz series or fall back to Iran agreement
+            candidates = markets_by_prefix.get("KXCLOSEHORMUZ", [])
+            if candidates:
+                best = max(candidates, key=lambda m: m.volume)
+                pred.kalshi_ticker = best.ticker
+            else:
+                # Fallback: Iran agreement is correlated with Hormuz reopening
+                candidates = markets_by_prefix.get("KXUSAIRANAGREEMENT", [])
+                if candidates:
+                    best = max(candidates, key=lambda m: m.volume)
+                    pred.kalshi_ticker = best.ticker
+
+        elif pred.model_id == "oil_price":
+            # Map to WTI max price targets
+            # KXWTIMAX-26DEC31-T125 = "Will WTI hit $125 by year end?"
+            # If model predicts decrease → low prob of hitting high targets
+            # If model predicts increase → high prob of hitting targets
+            candidates = markets_by_prefix.get("KXWTIMAX", [])
+            if candidates:
+                # Extract price target from ticker: "KXWTIMAX-26DEC31-T125" → 125
+                def _target(mp: MarketPrice) -> float:
+                    for part in mp.ticker.split("-"):
+                        if part.startswith("T"):
+                            try:
+                                return float(part[1:])
+                            except ValueError:
+                                pass
+                    return 0.0
+
+                # Pick the $120 target as baseline (closest to current ~$92-113 range)
+                # Model predicting decrease → prob of hitting $120 is LOW
+                # Model predicting increase → prob of hitting $120 is HIGH
+                target_120 = [m for m in candidates if _target(m) == 120]
+                target_125 = [m for m in candidates if _target(m) == 125]
+                best_candidates = target_120 or target_125 or candidates
+                best = max(best_candidates, key=lambda m: m.volume)
+                pred.kalshi_ticker = best.ticker
+
+                # Translate oil direction prediction into market probability
+                # Model says P(decrease) = 0.75 → P(WTI hits $120) ≈ 1 - 0.75 = 0.25
+                # Model says P(increase) = 0.80 → P(WTI hits $120) ≈ 0.80
+                if pred.direction == "decrease":
+                    pred.probability = 1.0 - pred.confidence
+                elif pred.direction == "increase":
+                    pred.probability = pred.confidence
+                # "stable" keeps probability as-is (around 0.5)
+
+    return predictions
 
 
 def _init_anthropic():

@@ -129,7 +129,7 @@ class OilPricePredictor:
             reasoning=parsed["reasoning"],
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
-            kalshi_ticker="KXOIL",
+            kalshi_ticker=None,  # mapped dynamically by brief pipeline
         )
 
     @staticmethod

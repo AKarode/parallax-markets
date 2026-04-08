@@ -137,9 +137,9 @@ class TestKalshiClientMocked:
         self._responses = [(200, {
             "market": {
                 "ticker": "HORMUZ-26APR15",
-                "yes_bid": 35,
-                "no_bid": 62,
-                "volume": 5000,
+                "yes_bid_dollars": 0.35,
+                "no_bid_dollars": 0.62,
+                "volume_fp": 5000,
             },
         })]
         price = await self.client.get_market_price("HORMUZ-26APR15")

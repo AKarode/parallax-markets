@@ -20,7 +20,26 @@ from parallax.markets.schemas import MarketPrice, Orderbook, OrderbookLevel, Pos
 
 logger = logging.getLogger(__name__)
 
-# Target tickers (series-level — actual event tickers discovered via search)
+# Target event tickers for Iran/Hormuz crisis
+IRAN_EVENT_TICKERS = [
+    "KXCLOSEHORMUZ-27JAN",       # Strait of Hormuz closure
+    "KXUSAIRANAGREEMENT-27",     # US-Iran nuclear deal
+    "KXIRANDEMOCRACY-27MAR01",   # Iran democracy
+    "KXELECTIRAN",               # Iran presidential election
+    "KXPAHLAVIHEAD-27JAN",       # Pahlavi leads Iran
+    "KXPAHLAVIVISITA",           # Pahlavi visits Iran
+    "KXIRANEMBASSY-27",          # US reopens Iran embassy
+    "KXRECOGPERSONIRAN-26",      # US recognizes Pahlavi
+    "KXNEXTIRANLEADER-45JAN01",  # Next Supreme Leader
+    "KXWTIMAX-26DEC31",          # Oil (WTI) high by year end
+    "KXWTIMIN-26DEC31",          # Oil (WTI) low by year end
+    "KXOILRIGS-26",              # US oil rigs end of 2026
+]
+
+# Search keywords for discovering new markets
+IRAN_KEYWORDS = ["iran", "hormuz", "ceasefire", "oil", "crude", "wti", "brent"]
+
+# Legacy series constants (for backwards compat)
 HORMUZ_SERIES = "KXCLOSEHORMUZ"
 IRAN_CEASEFIRE_SERIES = "KXIRANCEASEFIRE"
 OIL_PRICE_SERIES = "KXOIL"
@@ -107,6 +126,19 @@ class KalshiClient:
         data = await self._request("GET", "/markets", params=params)
         return data.get("markets", [])
 
+    async def search_markets(self, query: str) -> list[dict]:
+        """Search markets by keyword (e.g., 'Iran', 'oil', 'Hormuz')."""
+        params = {"status": "open"}
+        data = await self._request("GET", "/markets", params=params)
+        markets = data.get("markets", [])
+        q = query.lower()
+        return [
+            m for m in markets
+            if q in m.get("title", "").lower()
+            or q in m.get("ticker", "").lower()
+            or q in m.get("subtitle", "").lower()
+        ]
+
     async def get_orderbook(self, ticker: str) -> Orderbook:
         """Fetch the orderbook for a specific market ticker."""
         data = await self._request("GET", f"/markets/{ticker}/orderbook")
@@ -123,9 +155,13 @@ class KalshiClient:
         """Fetch the current market price for a ticker."""
         data = await self._request("GET", f"/markets/{ticker}")
         market = data.get("market", data)
-        yes_price = market.get("yes_bid", 0) / 100.0
-        no_price = market.get("no_bid", 0) / 100.0
-        volume = float(market.get("volume", 0))
+        # v2 API uses _dollars suffix fields (float, 0.0-1.0)
+        yes_price = float(market.get("yes_bid_dollars", 0) or market.get("last_price_dollars", 0) or 0)
+        no_price = float(market.get("no_bid_dollars", 0) or 0)
+        if yes_price > 0 and no_price == 0:
+            no_price = 1.0 - yes_price
+        volume = float(market.get("volume_fp", 0) or market.get("volume", 0) or 0)
+        title = market.get("title", ticker)
         return MarketPrice(
             ticker=ticker,
             source="kalshi",
