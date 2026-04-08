@@ -40,13 +40,13 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - CLI entry point (`parallax.cli.brief`) running full pipeline: news -> predict -> market -> diverge -> trade
 - FastAPI server with 6 endpoints (stub -- not hydrated with real data)
 - Docker Compose for backend
-- 120 tests passing
+- 120 tests passing (165 after Phase 1)
 
 ### Active
 
-- [ ] Contract registry in DuckDB with proxy classification per model type (Phase 1)
-- [ ] Mapping policy replacing heuristic ticker matching with structured proxy-aware logic (Phase 1)
-- [ ] Signal ledger persisting every signal with full provenance (Phase 1)
+- [x] Contract registry in DuckDB with proxy classification per model type — Validated in Phase 1
+- [x] Mapping policy replacing heuristic ticker matching with structured proxy-aware logic — Validated in Phase 1
+- [x] Signal ledger persisting every signal with full provenance — Validated in Phase 1
 - [ ] Prediction persistence with calibration queries (Phase 2)
 - [ ] Paper trading evaluation with contract-level P&L by proxy class (Phase 3)
 - [ ] Deployment hardening: Docker health checks, API hydration, error handling (Phase 4)
@@ -118,4 +118,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-08 after dead code pruning and planning doc rewrite*
+*Last updated: 2026-04-08 after Phase 1 completion (contract registry, mapping policy, signal ledger)*
