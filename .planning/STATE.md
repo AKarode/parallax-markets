@@ -4,15 +4,15 @@
 
 See: .planning/PROJECT.md (updated 2026-03-30)
 
-**Core value:** Predictions that beat human intuition about the Iran-Hormuz crisis -- continuously evaluated and improved against ground truth.
-**Current focus:** Phase 1: Foundation Hardening
+**Core value:** Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects.
+**Current focus:** Not started (defining requirements)
 
 ## Current Position
 
-Phase: 1 of 9 (Foundation Hardening)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-30 -- Roadmap created from requirements and research
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-07 ��� Milestone v1.0 Kalshi Prediction Market Pivot started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -42,10 +42,11 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Roadmap: 9 phases derived from 34 requirements, fine granularity
-- Roadmap: Sequential execution order (no parallelism) for solo developer simplicity
-- Research: Single-process asyncio EventBus architecture (not microservices)
-- Research: Fix WorldState/DB divergence and cascade runaway before any live data flows
+- Pivot: Kill 50-agent swarm, replace with 3 focused prediction models (oil, ceasefire, Hormuz)
+- Pivot: Kalshi/Polymarket integration for market consensus benchmarks and paper trading
+- Pivot: P&L is the eval — prediction market resolution replaces manual ground truth scoring
+- Pivot: Ship in days not months — 2-week ceasefire window is validation deadline
+- Retained: GDELT ingestion, cascade engine, DuckDB, budget tracker from prior branches
 
 ### Pending Todos
 
@@ -53,10 +54,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- 10 parallel feature branches need merging -- interface mismatches expected at merge boundaries
-- WorldState dirty-set clearing bug (clears before DB write confirmed) -- must fix in Phase 1
-- Cascade PRICE_ELASTICITY=3.0 with no damping -- runaway risk, must fix in Phase 1
-- Research flags Phase 4 (agents), Phase 5 (eval), Phase 7 (prompt improvement) for deeper research during planning
+- Ceasefire window: 2 weeks from April 7 — must have paper trading running before it expires
+- Kalshi API auth requires RSA key pair generation from account settings
+- Polymarket technically restricted for US users — read-only data access is fine
+- GDELT ingestion needs adaptation: feed event chains to prediction models, not raw events to 50 agents
+- Cascade engine needs probability output format (not just world state deltas)
 
 ## Session Continuity
 
