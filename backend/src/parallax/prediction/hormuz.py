@@ -158,9 +158,15 @@ class HormuzReopeningPredictor:
         if not events:
             return "No recent events available."
         lines = []
-        for e in events:
-            actor1 = e.get("Actor1Name", "Unknown")
-            actor2 = e.get("Actor2Name", "Unknown")
-            code = e.get("EventCode", "?")
-            lines.append(f"- {actor1} -> {actor2}: code={code}")
+        for e in events[:20]:
+            # Support both new news format and legacy GDELT BigQuery format
+            if "title" in e:
+                lines.append(f"- [{e.get('published_at', 'unknown')}] {e['title']}")
+                if e.get("snippet"):
+                    lines.append(f"  {e['snippet'][:200]}")
+            else:
+                actor1 = e.get("Actor1Name", "Unknown")
+                actor2 = e.get("Actor2Name", "Unknown")
+                code = e.get("EventCode", "?")
+                lines.append(f"- {actor1} -> {actor2}: code={code}")
         return "\n".join(lines)

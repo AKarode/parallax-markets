@@ -106,9 +106,26 @@ class CeasefirePredictor:
 
     @staticmethod
     def _filter_diplomatic(events: list[dict]) -> list[dict]:
-        """Filter events for diplomatic/cooperative signals."""
+        """Filter events for diplomatic/cooperative signals.
+
+        For new-format news events (with 'title'), use keyword matching
+        since they lack CAMEO codes. For legacy GDELT BigQuery events,
+        use CAMEO event code filtering.
+        """
+        diplomatic_keywords = {
+            "ceasefire", "negotiation", "talks", "diplomacy", "diplomatic",
+            "mediator", "mediation", "peace", "agreement", "treaty",
+            "de-escalation", "withdrawal", "cooperation",
+        }
         result = []
         for e in events:
+            # New news format: keyword-based filtering
+            if "title" in e:
+                title_lower = e["title"].lower()
+                if any(kw in title_lower for kw in diplomatic_keywords):
+                    result.append(e)
+                continue
+            # Legacy GDELT BigQuery format: CAMEO code filtering
             code = str(e.get("EventCode", ""))
             root_code = code[:2] if len(code) >= 2 else code
             if root_code in DIPLOMATIC_CODES or code in DIPLOMATIC_CODES:
@@ -120,10 +137,16 @@ class CeasefirePredictor:
         if not events:
             return "No events available."
         lines = []
-        for e in events:
-            actor1 = e.get("Actor1Name", "Unknown")
-            actor2 = e.get("Actor2Name", "Unknown")
-            code = e.get("EventCode", "?")
-            goldstein = e.get("GoldsteinScale", 0)
-            lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
+        for e in events[:20]:
+            # Support both new news format and legacy GDELT BigQuery format
+            if "title" in e:
+                lines.append(f"- [{e.get('published_at', 'unknown')}] {e['title']}")
+                if e.get("snippet"):
+                    lines.append(f"  {e['snippet'][:200]}")
+            else:
+                actor1 = e.get("Actor1Name", "Unknown")
+                actor2 = e.get("Actor2Name", "Unknown")
+                code = e.get("EventCode", "?")
+                goldstein = e.get("GoldsteinScale", 0)
+                lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
         return "\n".join(lines)
