@@ -43,9 +43,9 @@ Plans:
   4. At least one week of prediction history is accumulated and queryable
 **Plans:** 3 plans
 Plans:
-- [ ] 02-01-PLAN.md — Prediction persistence: prediction_log table + PredictionLogger + run_id in signal_ledger + brief.py wiring
-- [ ] 02-02-PLAN.md — Resolution checker: Kalshi settlement polling + signal_ledger backfill + --check-resolutions CLI
-- [ ] 02-03-PLAN.md — Calibration queries: hit rate by proxy class, calibration curve, edge decay + --calibration CLI + 7-day data guard
+- [x] 02-01-PLAN.md — Prediction persistence: prediction_log table + PredictionLogger + run_id in signal_ledger + brief.py wiring
+- [x] 02-02-PLAN.md — Resolution checker: Kalshi settlement polling + signal_ledger backfill + --check-resolutions CLI
+- [x] 02-03-PLAN.md — Calibration queries: hit rate by proxy class, calibration curve, edge decay + --calibration CLI + 7-day data guard
 
 ### Phase 3: Paper Trading Evaluation + Continuous Improvement
 **Goal:** Contract-level P&L tracking proves or disproves the system's edge, then iterates on model parameters and prompts based on calibration data.
