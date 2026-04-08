@@ -20,6 +20,7 @@ def test_create_tables_creates_all_expected_tables(db):
         "market_prices",
         "contract_registry",
         "contract_proxy_map",
+        "signal_ledger",
     }
     assert expected == table_names
 

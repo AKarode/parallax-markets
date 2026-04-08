@@ -191,3 +191,33 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (ticker, model_type)
         )
     """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS signal_ledger (
+            signal_id VARCHAR PRIMARY KEY,
+            created_at TIMESTAMP NOT NULL,
+            model_id VARCHAR NOT NULL,
+            model_claim TEXT NOT NULL,
+            model_probability DOUBLE NOT NULL,
+            model_timeframe VARCHAR NOT NULL,
+            model_reasoning TEXT,
+            contract_ticker VARCHAR NOT NULL,
+            contract_title VARCHAR,
+            proxy_class VARCHAR NOT NULL,
+            confidence_discount DOUBLE NOT NULL,
+            market_yes_price DOUBLE NOT NULL,
+            market_no_price DOUBLE NOT NULL,
+            market_volume DOUBLE,
+            raw_edge DOUBLE NOT NULL,
+            effective_edge DOUBLE NOT NULL,
+            signal VARCHAR NOT NULL,
+            trade_id VARCHAR,
+            traded BOOLEAN DEFAULT false,
+            trade_refused_reason TEXT,
+            resolution_price DOUBLE,
+            resolved_at TIMESTAMP,
+            realized_pnl DOUBLE,
+            model_was_correct BOOLEAN,
+            proxy_was_aligned BOOLEAN
+        )
+    """)
