@@ -2,141 +2,88 @@
 
 ## Overview
 
-Parallax has five major subsystems (ingestion, agents, simulation, database, frontend) built across 10 parallel feature branches. The roadmap integrates these into a single live pipeline, adds prediction evaluation and prompt improvement, then wires everything to a real-time dashboard. The build order is strictly dependency-constrained: foundation fixes before pipeline, pipeline before API, API before frontend panels, eval before prompt improvement, and calibration last (needs accumulated prediction history).
+Parallax is a working CLI prediction market edge-finder. The pipeline runs end-to-end: news ingestion (Google News RSS + GDELT DOC) -> 3 prediction models (Claude Sonnet) -> market price comparison (Kalshi + Polymarket) -> divergence detection -> paper trading (Kalshi sandbox). 120 tests passing. Dead code pruned April 8 2026.
+
+The roadmap strengthens the pipeline's trustworthiness and expands its scope. Build order: contract alignment first (fixes the biggest structural weakness -- heuristic ticker mapping), then prediction persistence (needed for calibration), then paper trading evaluation (proves edge with P&L), then deployment hardening, then thesis expansion.
 
 ## Phases
 
-**Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
-
-Decimal phases appear between their surrounding integers in numeric order.
-
-- [ ] **Phase 1: Foundation Hardening** - Merge 10 branches, fix data integrity bugs, establish shared contracts
-- [ ] **Phase 2: Live Pipeline** - Wire EventBus, TickOrchestrator, ingestion pollers, and agent runner into end-to-end flow
-- [ ] **Phase 3: Backend API** - FastAPI REST + WebSocket endpoints serving world state and pushing live deltas
-- [ ] **Phase 4: Frontend Core Panels** - Wire real pipeline data to agent activity, indicators, map, and timeline panels
-- [ ] **Phase 5: Eval Framework** - Structured prediction logging, ground truth resolution, Brier scoring, daily eval cron
-- [ ] **Phase 6: Frontend Intelligence Views** - Prediction timeline with outcomes and cascade trace visualization
-- [ ] **Phase 7: Prompt Improvement** - Automated worst-performer identification, meta-LLM prompt patches, A/B testing
-- [ ] **Phase 8: Anomaly Detection** - Sliding window z-score on GDELT event frequency with frontend alert banner
-- [ ] **Phase 9: Calibration** - Calibration curve computation and frontend visualization in eval dashboard
+- [ ] **Phase 1: Contract Registry + Mapping Policy + Evaluation Ledger** - Formal proposition alignment between model predictions and tradeable contracts
+- [ ] **Phase 2: Prediction Persistence + Calibration** - Persist every prediction with full context, enable calibration analysis
+- [ ] **Phase 3: Paper Trading Evaluation** - Contract-level P&L tracking to prove or disprove edge
+- [ ] **Phase 4: Deployment Fixes** - Docker reliability, API hydration, error handling, structured logging
+- [ ] **Phase 5: Second Thesis Expansion** - Expand beyond Iran/Hormuz to additional prediction market opportunities
 
 ## Phase Details
 
-### Phase 1: Foundation Hardening
-**Goal**: A single merged codebase with verified data integrity and shared contracts across all modules
-**Depends on**: Nothing (first phase)
-**Requirements**: FOUND-01, FOUND-02, FOUND-03, FOUND-04
+### Phase 1: Contract Registry + Mapping Policy + Evaluation Ledger
+**Goal:** Every trade signal has explicit proposition alignment, proxy quality tracking, and confidence discounting -- replacing the heuristic `_map_predictions_to_markets()`.
+**Depends on:** Nothing (first phase)
+**Requirements:** REG-01, REG-02, REG-03, REG-04, REG-05
 **Success Criteria** (what must be TRUE):
-  1. All 10 feature branches are merged into one branch with all existing tests passing
-  2. WorldState dirty-set clearing only happens after DbWriter confirms the write succeeded
-  3. Cascade engine applies cumulative damping that prevents price values from exceeding configurable bounds over multiple ticks
-  4. A shared Pydantic contracts module exists and is imported by simulation, agents, ingestion, and API modules
-**Plans**: TBD
+  1. Contract registry in DuckDB stores every Kalshi/Polymarket contract with resolution criteria and proxy classification per model type
+  2. Mapping policy replaces `_map_predictions_to_markets()` with explicit proxy-aware decision logic that discounts edge for non-DIRECT mappings
+  3. Signal ledger records every signal with full provenance (model claim, contract mapped, proxy class, market state, trade decision)
+  4. Pipeline runs end-to-end using new contract-aware mapping instead of heuristic ticker matching
+**Plans:** TBD
+**Reference:** .planning/research/contract-mapping/RESEARCH.md
 
-### Phase 2: Live Pipeline
-**Goal**: Real-world events flow end-to-end through the system: GDELT ingestion to agent deliberation to cascade simulation to persisted world state
-**Depends on**: Phase 1
-**Requirements**: PIPE-01, PIPE-02, PIPE-03, PIPE-04, PIPE-05, PIPE-06
+### Phase 2: Prediction Persistence + Calibration
+**Goal:** Every prediction the system makes is persisted with full context, enabling calibration analysis and model improvement.
+**Depends on:** Phase 1 (needs signal ledger schema)
+**Requirements:** PERS-01, PERS-02, PERS-03, PERS-04
 **Success Criteria** (what must be TRUE):
-  1. Running `docker compose up` starts the pipeline and within 15 minutes a GDELT event appears in DuckDB
-  2. Agent decisions are produced in response to ingested events and persisted with structured schemas
-  3. Cascade rules fire after agent decisions, updating world state variables (oil flow, prices, escalation index)
-  4. The TickOrchestrator completes full tick cycles (ingest, route, deliberate, cascade, flush) without manual intervention
-  5. All module communication goes through the EventBus -- no direct cross-module function calls
-**Plans**: TBD
+  1. Every prediction output (probability, reasoning, news context, cascade state) is persisted in DuckDB
+  2. Resolution checker polls Kalshi API for settled contracts and backfills outcomes
+  3. Calibration queries work: hit rate by proxy class, model calibration curve (are 70% predictions right 70% of the time?), edge decay analysis
+  4. At least one week of prediction history is accumulated and queryable
+**Plans:** TBD
 
-### Phase 3: Backend API
-**Goal**: Frontend can load current state on page open and receive live updates as ticks complete
-**Depends on**: Phase 2
-**Requirements**: API-01, API-02, API-03
+### Phase 3: Paper Trading Evaluation
+**Goal:** Contract-level P&L tracking proves or disproves the system's edge with statistical significance.
+**Depends on:** Phase 2 (needs prediction persistence + resolution data)
+**Requirements:** TRAD-01, TRAD-02, TRAD-03
 **Success Criteria** (what must be TRUE):
-  1. GET requests to REST endpoints return current world state, recent agent decisions, predictions, and indicator values
-  2. A WebSocket connection receives tick-batched delta messages within seconds of each tick completing
-  3. Health endpoint reports last GDELT fetch timestamp, last tick number, and remaining agent budget for the day
-**Plans**: TBD
+  1. Paper trades are tracked at contract level with entry price, exit/resolution price, and realized P&L
+  2. P&L is segmented by proxy class (DIRECT vs NEAR_PROXY vs LOOSE_PROXY)
+  3. Summary report shows total P&L, win rate, average edge at entry, and whether edge is statistically significant
+**Plans:** TBD
 
-### Phase 4: Frontend Core Panels
-**Goal**: The dashboard shows real live data from the running pipeline -- not placeholders
-**Depends on**: Phase 3
-**Requirements**: FE-01, FE-02, FE-03, FE-04
+### Phase 4: Deployment Fixes
+**Goal:** The system runs reliably in Docker with hydrated API endpoints and proper error handling.
+**Depends on:** Phase 1 (contract registry needed for API responses)
+**Requirements:** DEPLOY-01, DEPLOY-02, DEPLOY-03, DEPLOY-04
 **Success Criteria** (what must be TRUE):
-  1. Agent Activity panel displays real agent decisions with actor name, reasoning summary, and timestamp updating live
-  2. Live Indicators panel shows current oil prices (Brent/WTI), Hormuz traffic flow percentage, pipeline bypass capacity, and escalation index -- all from real data
-  3. H3 hex map renders influence zones and threat levels from actual world state, with colors and elevation changing as ticks progress
-  4. Timeline panel shows a scrollable history of simulation events that updates as new events arrive
-**Plans**: TBD
-**UI hint**: yes
+  1. `docker compose up` starts the backend and health check passes
+  2. FastAPI endpoints return real data (predictions, markets, divergences, trades) not empty responses
+  3. Pipeline handles API failures gracefully (Kalshi rate limits, GDELT 429s, network errors) with retry + fallback
+  4. Logging provides clear audit trail of each pipeline run
+**Plans:** TBD
 
-### Phase 5: Eval Framework
-**Goal**: Every agent prediction is scored against reality, building the data foundation for prompt improvement and analyst trust
-**Depends on**: Phase 2
-**Requirements**: EVAL-01, EVAL-02, EVAL-03, EVAL-04, EVAL-05, EVAL-06
+### Phase 5: Second Thesis Expansion
+**Goal:** Expand beyond Iran/Hormuz to additional prediction market opportunities (energy/macro).
+**Depends on:** Phase 3 (must prove edge on first thesis before expanding)
+**Requirements:** THESIS-01, THESIS-02, THESIS-03
 **Success Criteria** (what must be TRUE):
-  1. Agent predictions are parsed into structured records (direction, magnitude, timeframe, confidence) and persisted in DuckDB
-  2. Oil price predictions are automatically resolved against EIA data and scored with Brier score, direction accuracy, and magnitude accuracy
-  3. A daily eval cron scores all predictions past their resolve_by date without manual trigger
-  4. Each prediction is linked to the prompt version that produced it
-  5. Eval results can be queried by agent name, time range, and prediction type via the eval query interface
-**Plans**: TBD
-
-### Phase 6: Frontend Intelligence Views
-**Goal**: The analyst can see prediction track records and understand how cascade effects chain together
-**Depends on**: Phase 5, Phase 4
-**Requirements**: FE-05, FE-06
-**Success Criteria** (what must be TRUE):
-  1. Prediction timeline shows a scrollable history of predictions with their outcomes (hit/miss) and numerical scores
-  2. Cascade trace visualization shows readable effect chains (e.g., "tanker seized -> flow -30% -> price +$8 -> pipeline activated") for recent simulation events
-**Plans**: TBD
-**UI hint**: yes
-
-### Phase 7: Prompt Improvement
-**Goal**: Underperforming agents automatically get better prompts, closing the intelligence flywheel
-**Depends on**: Phase 5
-**Requirements**: PROMPT-01, PROMPT-02, PROMPT-03, PROMPT-04
-**Success Criteria** (what must be TRUE):
-  1. The system identifies the N worst-performing agents by eval score and flags them for prompt revision
-  2. A meta-LLM generates candidate prompt patches for flagged agents without human intervention
-  3. New prompts are A/B tested against old prompts, and the winner is automatically promoted
-  4. All meta-LLM calls for prompt improvement are tracked within the $20/day budget (no budget overruns from improvement loop)
-**Plans**: TBD
-
-### Phase 8: Anomaly Detection
-**Goal**: The analyst is alerted when unusual patterns appear in the event stream before agents even process them
-**Depends on**: Phase 2
-**Requirements**: ANOM-01, ANOM-02, ANOM-03
-**Success Criteria** (what must be TRUE):
-  1. A sliding window z-score detector identifies unusual spikes in GDELT event frequency grouped by actor pair
-  2. An alert banner appears in the frontend within one tick of an anomaly threshold being exceeded
-  3. Detected anomalies are logged and included in the context window provided to agents for their next deliberation
-**Plans**: TBD
-**UI hint**: yes
-
-### Phase 9: Calibration
-**Goal**: The analyst can assess whether agent confidence levels are meaningful (does 70% confidence mean 70% accuracy?)
-**Depends on**: Phase 5
-**Requirements**: CAL-01, CAL-02
-**Success Criteria** (what must be TRUE):
-  1. Predictions are bucketed by stated confidence level and actual hit rates are computed per bucket
-  2. A calibration curve chart is rendered in the frontend eval dashboard showing ideal vs actual calibration
-**Plans**: TBD
-**UI hint**: yes
+  1. At least one additional thesis domain identified with active Kalshi/Polymarket contracts
+  2. New prediction model added for the second thesis using the same pipeline infrastructure
+  3. Contract registry expanded with new contracts and proxy classifications
+**Plans:** TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
-Note: Phases 5, 8, 9 depend on Phase 2 (not Phase 4), so 5 could theoretically parallel 3/4. However, sequential execution is simpler for a solo developer.
+Phases 1 -> 2 -> 3, with Phase 4 parallelizable after Phase 1. Phase 5 after Phase 3.
+
+```
+Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 5
+   └──────> Phase 4
+```
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Hardening | 0/TBD | Not started | - |
-| 2. Live Pipeline | 0/TBD | Not started | - |
-| 3. Backend API | 0/TBD | Not started | - |
-| 4. Frontend Core Panels | 0/TBD | Not started | - |
-| 5. Eval Framework | 0/TBD | Not started | - |
-| 6. Frontend Intelligence Views | 0/TBD | Not started | - |
-| 7. Prompt Improvement | 0/TBD | Not started | - |
-| 8. Anomaly Detection | 0/TBD | Not started | - |
-| 9. Calibration | 0/TBD | Not started | - |
+| 1. Contract Registry + Mapping Policy | 0/TBD | Not started | - |
+| 2. Prediction Persistence + Calibration | 0/TBD | Not started | - |
+| 3. Paper Trading Evaluation | 0/TBD | Not started | - |
+| 4. Deployment Fixes | 0/TBD | Not started | - |
+| 5. Second Thesis Expansion | 0/TBD | Not started | - |
