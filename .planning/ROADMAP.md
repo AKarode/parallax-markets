@@ -27,9 +27,9 @@ The roadmap strengthens the pipeline's trustworthiness and expands its scope. Bu
   4. Pipeline runs end-to-end using new contract-aware mapping instead of heuristic ticker matching
 **Plans:** 3 plans
 Plans:
-- [ ] 01-01-PLAN.md — Contract schemas (ProxyClass, ContractRecord, MappingResult) + DuckDB tables + ContractRegistry CRUD + seed data
-- [ ] 01-02-PLAN.md — MappingPolicy class with proxy-aware confidence discounting and probability inversion
-- [ ] 01-03-PLAN.md — SignalLedger persistence + rewire brief.py to use MappingPolicy + SignalLedger
+- [x] 01-01-PLAN.md — Contract schemas (ProxyClass, ContractRecord, MappingResult) + DuckDB tables + ContractRegistry CRUD + seed data
+- [x] 01-02-PLAN.md — MappingPolicy class with proxy-aware confidence discounting and probability inversion
+- [x] 01-03-PLAN.md — SignalLedger persistence + rewire brief.py to use MappingPolicy + SignalLedger
 **Reference:** .planning/research/contract-mapping/RESEARCH.md
 
 ### Phase 2: Prediction Persistence + Calibration
