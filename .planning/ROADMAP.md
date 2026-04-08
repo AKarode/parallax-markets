@@ -43,14 +43,16 @@ Plans:
   4. At least one week of prediction history is accumulated and queryable
 **Plans:** TBD
 
-### Phase 3: Paper Trading Evaluation
-**Goal:** Contract-level P&L tracking proves or disproves the system's edge with statistical significance.
+### Phase 3: Paper Trading Evaluation + Continuous Improvement
+**Goal:** Contract-level P&L tracking proves or disproves the system's edge, then iterates on model parameters and prompts based on calibration data.
 **Depends on:** Phase 2 (needs prediction persistence + resolution data)
-**Requirements:** TRAD-01, TRAD-02, TRAD-03
+**Requirements:** TRAD-01, TRAD-02, TRAD-03, TRAD-04, TRAD-05
 **Success Criteria** (what must be TRUE):
   1. Paper trades are tracked at contract level with entry price, exit/resolution price, and realized P&L
   2. P&L is segmented by proxy class (DIRECT vs NEAR_PROXY vs LOOSE_PROXY)
   3. Summary report shows total P&L, win rate, average edge at entry, and whether edge is statistically significant
+  4. Automated daily pipeline runs (cron/scheduled) accumulate prediction + signal history
+  5. Calibration-driven parameter tuning: discount factors, min_edge threshold, and model prompts adjusted based on where predictions were wrong
 **Plans:** TBD
 
 ### Phase 4: Deployment Fixes

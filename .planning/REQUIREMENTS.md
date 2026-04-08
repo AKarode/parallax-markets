@@ -27,6 +27,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **TRAD-01**: Paper trades tracked at contract level with entry_price, resolution_price, realized_pnl, hold_duration
 - [ ] **TRAD-02**: P&L segmented by proxy_class -- DIRECT, NEAR_PROXY, LOOSE_PROXY reported separately
 - [ ] **TRAD-03**: Summary report: total P&L, win rate, avg edge at entry, Sharpe-like ratio, statistical significance test
+- [ ] **TRAD-04**: Automated daily pipeline runs (cron/scheduled) accumulate prediction + signal history without manual intervention
+- [ ] **TRAD-05**: Calibration-driven tuning: adjust discount_map values, min_edge threshold, and model prompts based on accumulated calibration data (hit rate by proxy class, edge decay)
 
 ### Deployment Fixes (Phase 4)
 
@@ -73,6 +75,8 @@ Requirements for initial release. Each maps to roadmap phases.
 | TRAD-01 | Phase 3 | Pending |
 | TRAD-02 | Phase 3 | Pending |
 | TRAD-03 | Phase 3 | Pending |
+| TRAD-04 | Phase 3 | Pending |
+| TRAD-05 | Phase 3 | Pending |
 | DEPLOY-01 | Phase 4 | Pending |
 | DEPLOY-02 | Phase 4 | Pending |
 | DEPLOY-03 | Phase 4 | Pending |
