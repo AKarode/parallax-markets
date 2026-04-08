@@ -193,6 +193,23 @@ def create_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """)
 
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS prediction_log (
+            log_id VARCHAR PRIMARY KEY,
+            run_id VARCHAR NOT NULL,
+            model_id VARCHAR NOT NULL,
+            probability DOUBLE NOT NULL,
+            direction VARCHAR NOT NULL,
+            confidence DOUBLE NOT NULL,
+            reasoning TEXT,
+            evidence JSON,
+            timeframe VARCHAR NOT NULL,
+            news_context JSON,
+            cascade_inputs JSON,
+            created_at TIMESTAMP NOT NULL
+        )
+    """)
+
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS signal_ledger (
             signal_id VARCHAR PRIMARY KEY,
             created_at TIMESTAMP NOT NULL,
