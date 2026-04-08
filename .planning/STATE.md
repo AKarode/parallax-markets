@@ -67,7 +67,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260408-0ez | Build Kalshi prediction market edge-finder | 2026-04-08 | 600f21d | [260408-0ez-build-kalshi-prediction-market-edge-find](./quick/260408-0ez-build-kalshi-prediction-market-edge-find/) |
-| 260408-4ys | Rewrite planning docs to reflect post-pruning architecture | 2026-04-08 | pending | [260408-4ys-rewrite-planning-docs-to-reflect-archite](./quick/260408-4ys-rewrite-planning-docs-to-reflect-archite/) |
+| 260408-4ys | Rewrite planning docs to reflect post-pruning architecture | 2026-04-08 | e0d2703 | [260408-4ys-rewrite-planning-docs-to-reflect-archite](./quick/260408-4ys-rewrite-planning-docs-to-reflect-archite/) |
 
 ## Session Continuity
 
