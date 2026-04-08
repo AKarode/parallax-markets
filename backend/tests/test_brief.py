@@ -161,6 +161,24 @@ class TestCLIFlags:
         args = parser.parse_args(["--check-resolutions"])
         assert args.check_resolutions is True
 
+    def test_calibration_flag(self):
+        """--calibration flag should be recognized by argparse."""
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--calibration", action="store_true")
+        args = parser.parse_args(["--calibration"])
+        assert args.calibration is True
+
+    def test_calibration_flag_default_false(self):
+        """--calibration should default to False."""
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--calibration", action="store_true")
+        args = parser.parse_args([])
+        assert args.calibration is False
+
     def test_check_resolutions_flag_default_false(self):
         """--check-resolutions should default to False."""
         import argparse

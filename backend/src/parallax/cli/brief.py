@@ -343,6 +343,18 @@ async def _run_check_resolutions() -> None:
     conn.close()
 
 
+def _run_calibration() -> None:
+    """Run calibration report and print to stdout."""
+    from parallax.scoring.calibration import calibration_report
+
+    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+    conn = duckdb.connect(db_path)
+    create_tables(conn)
+    report = calibration_report(conn)
+    print(report)
+    conn.close()
+
+
 def _map_predictions_to_markets_legacy(
     predictions: list[PredictionOutput],
     market_prices: list[MarketPrice],
@@ -591,6 +603,10 @@ def main():
 
     if args.check_resolutions:
         asyncio.run(_run_check_resolutions())
+        return
+
+    if args.calibration:
+        _run_calibration()
         return
 
     asyncio.run(run_brief(dry_run=args.dry_run, no_trade=args.no_trade))
