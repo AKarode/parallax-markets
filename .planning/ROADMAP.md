@@ -25,7 +25,11 @@ The roadmap strengthens the pipeline's trustworthiness and expands its scope. Bu
   2. Mapping policy replaces `_map_predictions_to_markets()` with explicit proxy-aware decision logic that discounts edge for non-DIRECT mappings
   3. Signal ledger records every signal with full provenance (model claim, contract mapped, proxy class, market state, trade decision)
   4. Pipeline runs end-to-end using new contract-aware mapping instead of heuristic ticker matching
-**Plans:** TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Contract schemas (ProxyClass, ContractRecord, MappingResult) + DuckDB tables + ContractRegistry CRUD + seed data
+- [ ] 01-02-PLAN.md — MappingPolicy class with proxy-aware confidence discounting and probability inversion
+- [ ] 01-03-PLAN.md — SignalLedger persistence + rewire brief.py to use MappingPolicy + SignalLedger
 **Reference:** .planning/research/contract-mapping/RESEARCH.md
 
 ### Phase 2: Prediction Persistence + Calibration
@@ -82,7 +86,7 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Contract Registry + Mapping Policy | 0/TBD | Not started | - |
+| 1. Contract Registry + Mapping Policy | 0/3 | Planning complete | - |
 | 2. Prediction Persistence + Calibration | 0/TBD | Not started | - |
 | 3. Paper Trading Evaluation | 0/TBD | Not started | - |
 | 4. Deployment Fixes | 0/TBD | Not started | - |
