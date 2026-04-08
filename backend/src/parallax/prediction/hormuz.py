@@ -31,6 +31,11 @@ Scenario analysis:
 Recent events:
 {events_summary}
 
+Current market prices:
+{market_prices_text}
+
+Consider what the market may already be pricing in and where it might be wrong.
+
 Estimate:
 (a) Probability of partial reopening (>25% flow restored) within 14 days
 (b) Probability of full reopening within 30 days
@@ -38,10 +43,11 @@ Estimate:
 Output ONLY valid JSON (no markdown):
 {{
   "probability": <float 0-1, probability of partial reopening within 14d>,
+  "confidence": <float 0-1, how confident you are in this estimate>,
   "direction": "<increase|decrease|stable>",
   "magnitude_range": [<low_pct_reopening>, <high_pct_reopening>],
-  "reasoning": "<2-3 sentence analysis>",
-  "evidence": ["<key evidence point 1>", "<key evidence point 2>"]
+  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what the market may be missing, second-order effects, and key uncertainties>",
+  "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>", "...(3-5 total)"]
 }}"""
 
 
@@ -62,6 +68,7 @@ class HormuzReopeningPredictor:
         self,
         recent_events: list[dict],
         world_state: WorldState,
+        market_prices: list[dict] | None = None,
     ) -> PredictionOutput:
         """Run Hormuz reopening prediction pipeline.
 
@@ -86,20 +93,33 @@ class HormuzReopeningPredictor:
             recovery_50=recovery_50,
             recovery_100=recovery_100,
             events_summary=events_summary,
+            market_prices_text=self._format_market_prices(market_prices),
         )
 
         response = await self._client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
+            model="claude-opus-4-20250514",
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
 
         usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "sonnet")
+        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
 
         # Step 4: Parse
-        text = response.content[0].text
-        parsed = json.loads(text)
+        raw_text = response.content[0].text
+        text = raw_text.strip()
+        if text.startswith("```json") or text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:]).strip()
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to parse hormuz_reopening raw response: %s", raw_text)
+            raise ValueError(
+                f"Failed to parse hormuz_reopening LLM response: {text[:200]}",
+            ) from exc
 
         return PredictionOutput(
             model_id="hormuz_reopening",
@@ -109,7 +129,7 @@ class HormuzReopeningPredictor:
             magnitude_range=parsed.get("magnitude_range", [0.0, 100.0]),
             unit="pct_reopening",
             timeframe="14d",
-            confidence=parsed["probability"],
+            confidence=parsed.get("confidence", 0.5),
             reasoning=parsed["reasoning"],
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
@@ -169,4 +189,13 @@ class HormuzReopeningPredictor:
                 actor2 = e.get("Actor2Name", "Unknown")
                 code = e.get("EventCode", "?")
                 lines.append(f"- {actor1} -> {actor2}: code={code}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_market_prices(market_prices: list[dict] | None) -> str:
+        if not market_prices:
+            return "No market prices available."
+        lines = []
+        for mp in market_prices:
+            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
         return "\n".join(lines)

@@ -31,11 +31,19 @@ Recent diplomatic events:
 Additional context:
 {context}
 
+Current market prices:
+{market_prices_text}
+
+Consider what the market may already be pricing in and where it might be wrong.
+
 Output ONLY valid JSON (no markdown):
 {{
   "probability": <float 0-1, probability of ceasefire holding>,
-  "reasoning": "<2-3 sentence analysis>",
-  "evidence": ["<key evidence point 1>", "<key evidence point 2>"]
+  "confidence": <float 0-1, how confident you are in this estimate>,
+  "direction": "<increase|decrease|stable>",
+  "magnitude_range": [<low>, <high>],
+  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what the market may be missing, second-order effects, and key uncertainties>",
+  "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>", "...(3-5 total)"]
 }}"""
 
 # CAMEO event codes for cooperative actions
@@ -57,6 +65,7 @@ class CeasefirePredictor:
         self,
         recent_events: list[dict],
         current_negotiations: str | None = None,
+        market_prices: list[dict] | None = None,
     ) -> PredictionOutput:
         """Run ceasefire prediction pipeline.
 
@@ -74,30 +83,43 @@ class CeasefirePredictor:
         prompt = CEASEFIRE_SYSTEM_PROMPT.format(
             diplomatic_events=events_text,
             context=context,
+            market_prices_text=self._format_market_prices(market_prices),
         )
 
         response = await self._client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
+            model="claude-opus-4-20250514",
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
 
         usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "sonnet")
+        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
 
         # Step 3: Parse response
-        text = response.content[0].text
-        parsed = json.loads(text)
+        raw_text = response.content[0].text
+        text = raw_text.strip()
+        if text.startswith("```json") or text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:]).strip()
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to parse ceasefire raw response: %s", raw_text)
+            raise ValueError(
+                f"Failed to parse ceasefire LLM response: {text[:200]}",
+            ) from exc
 
         return PredictionOutput(
             model_id="ceasefire",
             prediction_type="ceasefire_probability",
             probability=parsed["probability"],
-            direction="stable",
-            magnitude_range=[0.0, 1.0],
+            direction=parsed.get("direction", "stable"),
+            magnitude_range=parsed.get("magnitude_range", [0.0, 1.0]),
             unit="probability",
             timeframe="14d",
-            confidence=parsed["probability"],
+            confidence=parsed.get("confidence", 0.5),
             reasoning=parsed["reasoning"],
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
@@ -149,4 +171,13 @@ class CeasefirePredictor:
                 code = e.get("EventCode", "?")
                 goldstein = e.get("GoldsteinScale", 0)
                 lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_market_prices(market_prices: list[dict] | None) -> str:
+        if not market_prices:
+            return "No market prices available."
+        lines = []
+        for mp in market_prices:
+            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
         return "\n".join(lines)

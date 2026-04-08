@@ -218,6 +218,10 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
         )
 
         market_prices = kalshi_markets + poly_markets
+        mp_dicts = [
+            {"ticker": mp.ticker, "yes_price": mp.yes_price, "source": mp.source}
+            for mp in market_prices
+        ]
 
         # Run predictions (parallel)
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
@@ -225,9 +229,9 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
 
         predictions = list(await asyncio.gather(
-            oil_pred.predict(events, prices, world_state),
-            ceasefire_pred.predict(events),
-            hormuz_pred.predict(events, world_state),
+            oil_pred.predict(events, prices, world_state, market_prices=mp_dicts),
+            ceasefire_pred.predict(events, market_prices=mp_dicts),
+            hormuz_pred.predict(events, world_state, market_prices=mp_dicts),
         ))
 
     # Initialize contract registry, prediction logger, and signal ledger

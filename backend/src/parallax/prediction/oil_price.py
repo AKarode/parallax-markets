@@ -32,13 +32,19 @@ Recent GDELT events:
 Current EIA price data:
 {price_data}
 
+Current market prices:
+{market_prices_text}
+
+Consider what the market may already be pricing in and where it might be wrong.
+
 Output ONLY valid JSON (no markdown):
 {{
   "probability": <float 0-1, probability of significant price movement>,
+  "confidence": <float 0-1, how confident you are in this estimate>,
   "direction": "<increase|decrease|stable>",
   "magnitude_range": [<low_dollars>, <high_dollars>],
-  "reasoning": "<2-3 sentence analysis>",
-  "evidence": ["<key evidence point 1>", "<key evidence point 2>"]
+  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what the market may be missing, second-order effects, and key uncertainties>",
+  "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>", "...(3-5 total)"]
 }}"""
 
 
@@ -60,6 +66,7 @@ class OilPricePredictor:
         recent_events: list[dict],
         current_prices: list[dict],
         world_state: WorldState,
+        market_prices: list[dict] | None = None,
     ) -> PredictionOutput:
         """Run oil price prediction pipeline.
 
@@ -101,21 +108,34 @@ class OilPricePredictor:
             current_price=current_price,
             events_summary=events_summary,
             price_data=price_data,
+            market_prices_text=self._format_market_prices(market_prices),
         )
 
         response = await self._client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
+            model="claude-opus-4-20250514",
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
 
         # Record budget
         usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "sonnet")
+        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
 
         # Step 4: Parse response
-        text = response.content[0].text
-        parsed = json.loads(text)
+        raw_text = response.content[0].text
+        text = raw_text.strip()
+        if text.startswith("```json") or text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:]).strip()
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            logger.error("Failed to parse oil_price raw response: %s", raw_text)
+            raise ValueError(
+                f"Failed to parse oil_price LLM response: {text[:200]}",
+            ) from exc
 
         return PredictionOutput(
             model_id="oil_price",
@@ -125,7 +145,7 @@ class OilPricePredictor:
             magnitude_range=parsed["magnitude_range"],
             unit="USD/bbl",
             timeframe="7d",
-            confidence=parsed["probability"],
+            confidence=parsed.get("confidence", 0.5),
             reasoning=parsed["reasoning"],
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
@@ -143,8 +163,8 @@ class OilPricePredictor:
         """Extract latest Brent price from EIA data."""
         for p in prices:
             if p.get("series-id", "").startswith("RBRTE") or "brent" in str(p).lower():
-                return float(p.get("value", 80.0))
-        return 80.0  # fallback
+                return float(p.get("value", 100.0))
+        return 100.0  # fallback
 
     @staticmethod
     def _format_events(events: list[dict]) -> str:
@@ -173,4 +193,13 @@ class OilPricePredictor:
             period = p.get("period", "?")
             value = p.get("value", "?")
             lines.append(f"- {period}: ${value}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_market_prices(market_prices: list[dict] | None) -> str:
+        if not market_prices:
+            return "No market prices available."
+        lines = []
+        for mp in market_prices:
+            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
         return "\n".join(lines)
