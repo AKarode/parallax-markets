@@ -269,3 +269,158 @@ class TestSortedByEffectiveEdge:
         # Should be sorted by abs(effective_edge) descending
         edges = [abs(r.effective_edge) for r in results]
         assert edges == sorted(edges, reverse=True)
+
+
+class TestDiscountFromHistory:
+    """Tests for update_discounts_from_history() — adjusting discount factors from calibration data."""
+
+    @pytest.fixture()
+    def conn_and_policy(self) -> tuple[duckdb.DuckDBPyConnection, MappingPolicy]:
+        """In-memory DuckDB with seeded contracts and signal_ledger table."""
+        conn = duckdb.connect(":memory:")
+        create_tables(conn)
+        reg = ContractRegistry(conn)
+        reg.seed_initial_contracts()
+        policy = MappingPolicy(registry=reg, min_effective_edge_pct=5.0)
+        return conn, policy
+
+    def _insert_signals(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        proxy_class: str,
+        total: int,
+        correct: int,
+    ) -> None:
+        """Insert resolved signal_ledger rows for a given proxy class."""
+        for i in range(total):
+            is_correct = i < correct
+            conn.execute(
+                """
+                INSERT INTO signal_ledger (
+                    signal_id, run_id, created_at, model_id, model_claim,
+                    model_probability, model_timeframe, contract_ticker,
+                    proxy_class, confidence_discount, market_yes_price,
+                    market_no_price, raw_edge, effective_edge, signal,
+                    model_was_correct
+                ) VALUES (?, ?, CURRENT_TIMESTAMP, 'test', 'claim',
+                          0.6, '14d', 'KXTEST', ?, 0.6, 0.5, 0.5,
+                          0.1, 0.06, 'BUY_YES', ?)
+                """,
+                [f"sig-{proxy_class}-{i}", f"run-{i}", proxy_class, is_correct],
+            )
+
+    def test_no_data_defaults_unchanged(self, conn_and_policy: tuple) -> None:
+        """Test 1: No resolved signals -> discount factors remain at defaults."""
+        conn, policy = conn_and_policy
+
+        # Verify defaults before
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'near_proxy' LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        default_discount = row[0]
+
+        policy.update_discounts_from_history(conn)
+
+        # Verify unchanged
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'near_proxy' LIMIT 1"
+        ).fetchone()
+        assert row[0] == pytest.approx(default_discount)
+
+    def test_insufficient_data_no_adjustment(self, conn_and_policy: tuple) -> None:
+        """Test 2: Fewer than 5 resolved signals -> no adjustment."""
+        conn, policy = conn_and_policy
+        self._insert_signals(conn, "near_proxy", total=3, correct=3)
+
+        policy.update_discounts_from_history(conn)
+
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'near_proxy' LIMIT 1"
+        ).fetchone()
+        assert row[0] == pytest.approx(0.6)
+
+    def test_high_hit_rate_raises_discount(self, conn_and_policy: tuple) -> None:
+        """Test 3: NEAR_PROXY hit_rate=0.8 -> discount raised from 0.6 toward 0.8."""
+        conn, policy = conn_and_policy
+        self._insert_signals(conn, "near_proxy", total=10, correct=8)
+
+        policy.update_discounts_from_history(conn)
+
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'near_proxy' LIMIT 1"
+        ).fetchone()
+        new_discount = row[0]
+        # Should be between default (0.6) and hit_rate (0.8)
+        assert new_discount > 0.6
+        assert new_discount <= 0.8
+        # EMA: 0.6 * 0.7 + 0.8 * 0.3 = 0.42 + 0.24 = 0.66
+        assert new_discount == pytest.approx(0.66)
+
+    def test_low_hit_rate_lowers_discount(self, conn_and_policy: tuple) -> None:
+        """Test 4: NEAR_PROXY hit_rate=0.3 -> discount lowered from 0.6 toward 0.3."""
+        conn, policy = conn_and_policy
+        self._insert_signals(conn, "near_proxy", total=10, correct=3)
+
+        policy.update_discounts_from_history(conn)
+
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'near_proxy' LIMIT 1"
+        ).fetchone()
+        new_discount = row[0]
+        # Should be between hit_rate (0.3) and default (0.6)
+        assert new_discount >= 0.3
+        assert new_discount < 0.6
+        # EMA: 0.6 * 0.7 + 0.3 * 0.3 = 0.42 + 0.09 = 0.51
+        assert new_discount == pytest.approx(0.51)
+
+    def test_direct_floor(self, conn_and_policy: tuple) -> None:
+        """Test 5: DIRECT with poor hit_rate=0.5 -> discount never drops below 0.8."""
+        conn, policy = conn_and_policy
+        self._insert_signals(conn, "direct", total=10, correct=5)
+
+        policy.update_discounts_from_history(conn)
+
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'direct' LIMIT 1"
+        ).fetchone()
+        new_discount = row[0]
+        # EMA: 1.0 * 0.7 + 0.5 * 0.3 = 0.70 + 0.15 = 0.85
+        # But floor is 0.8, so 0.85 is above floor -> 0.85
+        assert new_discount >= 0.8
+        assert new_discount <= 1.0
+
+    def test_loose_proxy_ceiling(self, conn_and_policy: tuple) -> None:
+        """Test 6: LOOSE_PROXY with excellent hit_rate=0.9 -> discount never rises above 0.5."""
+        conn, policy = conn_and_policy
+        self._insert_signals(conn, "loose_proxy", total=10, correct=9)
+
+        policy.update_discounts_from_history(conn)
+
+        row = conn.execute(
+            "SELECT confidence_discount FROM contract_proxy_map WHERE proxy_class = 'loose_proxy' LIMIT 1"
+        ).fetchone()
+        new_discount = row[0]
+        # EMA: 0.3 * 0.7 + 0.9 * 0.3 = 0.21 + 0.27 = 0.48
+        # Ceiling is 0.5, so 0.48 is below ceiling -> 0.48
+        assert new_discount <= 0.5
+        assert new_discount > 0.3
+
+    def test_evaluate_uses_updated_discounts(self, conn_and_policy: tuple) -> None:
+        """Test 7: After update_discounts_from_history(), evaluate() uses new discount values."""
+        conn, policy = conn_and_policy
+        self._insert_signals(conn, "near_proxy", total=10, correct=8)
+
+        policy.update_discounts_from_history(conn)
+
+        prediction = _make_prediction(model_id="oil_price", probability=0.8)
+        market_prices = [_make_market_price("KXWTIMAX-26DEC31", yes_price=0.5)]
+        results = policy.evaluate(prediction, market_prices)
+
+        near_results = [r for r in results if r.contract_ticker == "KXWTIMAX-26DEC31"]
+        assert len(near_results) == 1
+        result = near_results[0]
+        # Discount should be updated from 0.6 to 0.66
+        assert result.confidence_discount == pytest.approx(0.66)
+        # effective_edge = raw_edge * 0.66 = 0.3 * 0.66 = 0.198
+        assert result.effective_edge == pytest.approx(0.3 * 0.66)
