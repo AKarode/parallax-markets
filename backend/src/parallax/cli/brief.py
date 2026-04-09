@@ -329,8 +329,9 @@ async def run_brief(
             logger.info("Recalibrated %s: %.2f -> %.2f", pred.model_id, raw, calibrated)
             pred.probability = calibrated
 
-    # Auto-tune edge thresholds from historical performance
+    # Auto-tune from historical performance
     policy.update_thresholds_from_history(conn)
+    policy.update_discounts_from_history(conn)
 
     # Contract-aware mapping with signal ledger
     all_signals = []
