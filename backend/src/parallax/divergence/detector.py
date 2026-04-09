@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
-from parallax.costs.fee_model import CostModel
 from parallax.markets.schemas import MarketPrice
 from parallax.prediction.schemas import PredictionOutput
 
@@ -25,8 +24,6 @@ class Divergence(BaseModel):
     buy_yes_edge: float | None
     buy_no_edge: float | None
     edge: float
-    gross_edge: float = 0.0
-    net_edge: float = 0.0
     edge_pct: float
     signal: str
     strength: str
@@ -41,15 +38,8 @@ class Divergence(BaseModel):
 class DivergenceDetector:
     """Compare model predictions against executable quotes and flag trades."""
 
-    def __init__(
-        self,
-        min_edge_pct: float = 5.0,
-        cost_model: CostModel | None = None,
-        max_quote_age_seconds: float = 0.0,
-    ) -> None:
+    def __init__(self, min_edge_pct: float = 5.0) -> None:
         self._min_edge = min_edge_pct / 100.0
-        self._cost_model = cost_model
-        self._max_quote_age = max_quote_age_seconds
 
     def detect(
         self,
@@ -65,38 +55,6 @@ class DivergenceDetector:
                 continue
 
             model_yes_probability = prediction.probability
-
-            # Staleness guard
-            if self._max_quote_age > 0:
-                quote_time = matched_market.quote_timestamp or matched_market.fetched_at
-                now = datetime.now(timezone.utc)
-                staleness = (now - quote_time).total_seconds()
-                if staleness > self._max_quote_age:
-                    divergences.append(
-                        Divergence(
-                            model_id=prediction.model_id,
-                            prediction=prediction,
-                            market_price=matched_market,
-                            model_probability=model_yes_probability,
-                            market_probability=matched_market.reference_price(),
-                            buy_yes_edge=None,
-                            buy_no_edge=None,
-                            edge=0.0,
-                            gross_edge=0.0,
-                            net_edge=0.0,
-                            edge_pct=0.0,
-                            signal="STALE_QUOTE",
-                            strength="negligible",
-                            entry_side=None,
-                            entry_price=None,
-                            entry_price_kind=None,
-                            entry_price_is_executable=False,
-                            tradeability_status="non_tradable",
-                            created_at=datetime.now(timezone.utc),
-                        ),
-                    )
-                    continue
-
             model_no_probability = 1.0 - model_yes_probability
             buy_yes_edge = None
             buy_no_edge = None
@@ -120,22 +78,12 @@ class DivergenceDetector:
             if buy_no_edge is not None:
                 candidates.append(("no", buy_no_edge, matched_market.best_no_ask or 0.0))
 
-            gross_edge_value = 0.0
-            net_edge_value = 0.0
-            sign = 1.0
-
             if not candidates:
                 tradeability_status = "non_tradable"
                 signal = "REFUSED"
             else:
                 best_side, best_edge, best_price = max(candidates, key=lambda item: item[1])
-                gross_edge_value = best_edge
-                if self._cost_model is not None:
-                    net_edge_value = self._cost_model.net_edge(best_edge)
-                else:
-                    net_edge_value = best_edge
-
-                if net_edge_value >= self._min_edge:
+                if best_edge >= self._min_edge:
                     entry_side = best_side
                     entry_price = best_price
                     entry_price_is_executable = True
@@ -143,9 +91,9 @@ class DivergenceDetector:
                         "best_yes_ask" if best_side == "yes" else "best_no_ask"
                     )
                     signal = "BUY_YES" if best_side == "yes" else "BUY_NO"
-
-                sign = 1.0 if best_side == "yes" else -1.0
-                edge = sign * net_edge_value
+                    edge = best_edge if best_side == "yes" else -best_edge
+                else:
+                    edge = best_edge if best_side == "yes" else -best_edge
 
             divergences.append(
                 Divergence(
@@ -157,8 +105,6 @@ class DivergenceDetector:
                     buy_yes_edge=buy_yes_edge,
                     buy_no_edge=buy_no_edge,
                     edge=edge,
-                    gross_edge=sign * gross_edge_value if candidates else 0.0,
-                    net_edge=sign * net_edge_value if candidates else 0.0,
                     edge_pct=edge * 100,
                     signal=signal,
                     strength=self._strength(abs(edge)),

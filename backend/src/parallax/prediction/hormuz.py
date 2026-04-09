@@ -33,8 +33,13 @@ Scenario analysis:
 Recent events:
 {events_summary}
 
+Current market prices:
+{market_prices_text}
+
 ## YOUR TRACK RECORD
 {track_record}
+
+Consider what the market may already be pricing in and where it might be wrong.
 
 Estimate:
 (a) Probability of partial reopening (>25% flow restored) within 14 days
@@ -68,6 +73,7 @@ class HormuzReopeningPredictor:
         self,
         recent_events: list[dict],
         world_state: WorldState,
+        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run Hormuz reopening prediction pipeline.
@@ -100,6 +106,7 @@ class HormuzReopeningPredictor:
             recovery_50=recovery_50,
             recovery_100=recovery_100,
             events_summary=events_summary,
+            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
@@ -198,3 +205,11 @@ class HormuzReopeningPredictor:
                 lines.append(f"- {actor1} -> {actor2}: code={code}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_market_prices(market_prices: list[dict] | None) -> str:
+        if not market_prices:
+            return "No market prices available."
+        lines = []
+        for mp in market_prices:
+            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
+        return "\n".join(lines)

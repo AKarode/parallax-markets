@@ -33,8 +33,13 @@ Recent diplomatic events:
 Additional context:
 {context}
 
+Current market prices:
+{market_prices_text}
+
 ## YOUR TRACK RECORD
 {track_record}
+
+Consider what the market may already be pricing in and where it might be wrong.
 
 Output ONLY valid JSON (no markdown):
 {{
@@ -65,6 +70,7 @@ class CeasefirePredictor:
         self,
         recent_events: list[dict],
         current_negotiations: str | None = None,
+        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run ceasefire prediction pipeline.
@@ -90,6 +96,7 @@ class CeasefirePredictor:
         prompt = CEASEFIRE_SYSTEM_PROMPT.format(
             diplomatic_events=events_text,
             context=context,
+            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
@@ -180,3 +187,11 @@ class CeasefirePredictor:
                 lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_market_prices(market_prices: list[dict] | None) -> str:
+        if not market_prices:
+            return "No market prices available."
+        lines = []
+        for mp in market_prices:
+            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
+        return "\n".join(lines)

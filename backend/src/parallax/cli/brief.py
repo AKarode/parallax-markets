@@ -14,17 +14,13 @@ from pathlib import Path
 import duckdb
 
 from parallax.budget.tracker import BudgetTracker
-from parallax.config.risk import load_risk_limits
 from parallax.contracts.mapping_policy import MappingPolicy
 from parallax.contracts.registry import ContractRegistry
-from parallax.contracts.schemas import MappingCostInputs
 from parallax.db.runtime import RuntimeConfig, resolve_runtime_config
 from parallax.db.schema import create_tables
 from parallax.markets.kalshi import IRAN_EVENT_TICKERS, KalshiClient
 from parallax.markets.polymarket import PolymarketClient
 from parallax.markets.schemas import MarketPrice
-from parallax.portfolio.allocator import PortfolioAllocator
-from parallax.portfolio.schemas import ProposedTrade, PortfolioState
 from parallax.prediction.ceasefire import CeasefirePredictor
 from parallax.prediction.hormuz import HormuzReopeningPredictor
 from parallax.prediction.oil_price import OilPricePredictor
@@ -48,7 +44,7 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
         PredictionOutput(
             model_id="oil_price",
             prediction_type="oil_price_direction",
-            probability=0.82,
+            probability=0.72,
             direction="increase",
             magnitude_range=[3.0, 8.0],
             unit="USD/bbl",
@@ -61,7 +57,7 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
         PredictionOutput(
             model_id="ceasefire",
             prediction_type="ceasefire_probability",
-            probability=0.65,
+            probability=0.62,
             direction="stable",
             magnitude_range=[0.0, 1.0],
             unit="probability",
@@ -97,14 +93,14 @@ def _make_dry_run_markets() -> list[MarketPrice]:
             fetched_at=now,
             venue_timestamp=now,
             quote_timestamp=now,
-            best_yes_bid=0.33,
-            best_yes_ask=0.36,
-            best_no_bid=0.64,
-            best_no_ask=0.67,
+            best_yes_bid=0.53,
+            best_yes_ask=0.56,
+            best_no_bid=0.44,
+            best_no_ask=0.47,
             yes_bid_ask_spread=0.03,
             no_bid_ask_spread=0.03,
-            yes_price=0.345,
-            no_price=0.655,
+            yes_price=0.545,
+            no_price=0.455,
             derived_price_kind="midpoint",
             data_environment="dry_run",
         ),
@@ -115,14 +111,14 @@ def _make_dry_run_markets() -> list[MarketPrice]:
             fetched_at=now,
             venue_timestamp=now,
             quote_timestamp=now,
-            best_yes_bid=0.30,
-            best_yes_ask=0.33,
-            best_no_bid=0.67,
-            best_no_ask=0.70,
+            best_yes_bid=0.46,
+            best_yes_ask=0.49,
+            best_no_bid=0.51,
+            best_no_ask=0.54,
             yes_bid_ask_spread=0.03,
             no_bid_ask_spread=0.03,
-            yes_price=0.315,
-            no_price=0.685,
+            yes_price=0.475,
+            no_price=0.525,
             derived_price_kind="midpoint",
             data_environment="dry_run",
         ),
@@ -350,8 +346,6 @@ async def run_brief(
     log_dir: Path | None = None,
 ) -> str:
     budget = BudgetTracker(daily_cap_usd=20.0)
-    risk_limits = load_risk_limits()
-    allocator = PortfolioAllocator(risk_limits)
     run_id = str(uuid.uuid4())
     runtime = resolve_runtime_config(dry_run=dry_run)
     conn = duckdb.connect(runtime.db_path)
@@ -379,25 +373,31 @@ async def run_brief(
             _fetch_polymarket_markets(),
         )
         market_prices = kalshi_markets + poly_markets
+        market_context = [
+            {
+                "ticker": market.ticker,
+                "derived_yes_price": market.yes_price,
+                "best_yes_ask": market.best_yes_ask,
+                "best_no_ask": market.best_no_ask,
+                "source": market.source,
+            }
+            for market in market_prices
+        ]
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
         predictions = list(
             await asyncio.gather(
-                oil_pred.predict(events, prices, world_state, db_conn=conn),
-                ceasefire_pred.predict(events, db_conn=conn),
-                hormuz_pred.predict(events, world_state, db_conn=conn),
+                oil_pred.predict(events, prices, world_state, market_prices=market_context, db_conn=conn),
+                ceasefire_pred.predict(events, market_prices=market_context, db_conn=conn),
+                hormuz_pred.predict(events, world_state, market_prices=market_context, db_conn=conn),
             ),
         )
 
     _persist_market_prices(conn, market_prices)
     registry = ContractRegistry(conn)
     registry.seed_initial_contracts()
-    policy = MappingPolicy(
-        registry=registry,
-        min_effective_edge_pct=5.0,
-        default_cost_inputs=MappingCostInputs(expected_fee_rate=0.07, expected_slippage_rate=0.01),
-    )
+    policy = MappingPolicy(registry=registry, min_effective_edge_pct=5.0)
     pred_logger = PredictionLogger(conn)
     ledger = SignalLedger(conn)
 
@@ -455,23 +455,8 @@ async def run_brief(
         if kalshi_key and kalshi_pk:
             kalshi = KalshiClient(api_key=kalshi_key, private_key_path=kalshi_pk)
             tracker = PaperTradeTracker(conn=conn, ledger=ledger, kalshi_client=kalshi)
-            portfolio = PortfolioState()  # TODO: load from DB for cumulative tracking
             for signal in ledger.get_actionable_signals():
-                if signal.effective_edge and signal.entry_price:
-                    trade = ProposedTrade(
-                        ticker=signal.contract_ticker,
-                        side=signal.entry_side or "yes",
-                        price=signal.entry_price,
-                        edge=signal.effective_edge,
-                        theme="iran_hormuz",
-                    )
-                    auth = allocator.authorize_trade(trade, portfolio)
-                    if not auth.authorized:
-                        logger.info("Allocator blocked %s: %s", signal.contract_ticker, auth.block_reason)
-                        continue
-                    qty = auth.allowed_size
-                else:
-                    qty = risk_limits.default_order_size
+                qty = 10 if signal.suggested_size == "full" else 5
                 await tracker.execute_signal(signal, quantity=qty)
             trade_journal = tracker.get_trade_journal()
     else:
@@ -494,8 +479,8 @@ async def run_brief(
             run_id,
             predictions,
             refreshed_signals,
-            trade_journal=trade_journal,
-            runtime=runtime,
+            runtime,
+            trade_journal,
             divergence_count=len(refreshed_signals),
             log_dir=log_dir,
         )

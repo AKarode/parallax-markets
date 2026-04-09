@@ -28,23 +28,6 @@ class PortfolioAllocator:
     def risk_limits(self) -> RiskLimits:
         return self._risk_limits
 
-    def kelly_size(self, edge: float, entry_price: float) -> int:
-        """Compute quarter-Kelly position size for a binary contract.
-
-        kelly_fraction = edge / (1 - entry_price)
-        size = floor(fraction * kelly_multiplier * bankroll / entry_price)
-        """
-        if edge <= 0 or entry_price <= 0 or entry_price >= 1.0:
-            return 0
-        kelly_fraction = edge / (1.0 - entry_price)
-        raw_size = (
-            kelly_fraction
-            * self._risk_limits.kelly_multiplier
-            * self._risk_limits.bankroll
-            / entry_price
-        )
-        return max(self._risk_limits.min_order_size, math.floor(raw_size))
-
     def authorize_trade(
         self,
         proposed_trade: ProposedTrade | Mapping[str, Any] | BaseModel,
@@ -53,10 +36,7 @@ class PortfolioAllocator:
         trade = self._coerce_trade(proposed_trade)
         portfolio_state = self._coerce_portfolio_state(current_positions)
 
-        if trade.edge is not None and trade.edge > 0:
-            requested_size = self.kelly_size(trade.edge, trade.price)
-        else:
-            requested_size = trade.normalized_size(self._risk_limits.default_order_size)
+        requested_size = trade.normalized_size(self._risk_limits.default_order_size)
         if requested_size < self._risk_limits.min_order_size:
             return TradeAuthorization(
                 authorized=False,

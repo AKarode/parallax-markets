@@ -45,7 +45,7 @@ DEFAULT_DISCOUNT_MAP: dict[str, float] = {
 class MappingCostInputs(BaseModel):
     """Expected crossing costs expressed as probability points."""
 
-    expected_fee_rate: float = 0.07  # Kalshi taker fee: $0.07 per $1 contract
+    expected_fee_rate: float = 0.01
     expected_slippage_rate: float = 0.01
     use_half_spread_as_slippage_floor: bool = True
 
