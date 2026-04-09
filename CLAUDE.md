@@ -31,6 +31,9 @@ python -m parallax.cli.brief --no-trade
 # Full pipeline with paper trade execution
 python -m parallax.cli.brief
 
+# Daily scorecard (computes 15+ metrics, writes to daily_scorecard table)
+python -m parallax.cli.brief --scorecard --date 2026-04-09
+
 # FastAPI server
 uvicorn parallax.main:app --reload
 ```
@@ -223,14 +226,13 @@ EIA_API_KEY              # Optional — EIA oil price data
 
 | Module | Purpose | Key Classes/Functions |
 |--------|---------|---------------------|
-| `cli/brief.py` | **Main entry point** — daily intelligence brief CLI | `run_brief()`, `_map_predictions_to_markets()` |
+| `cli/brief.py` | **Main entry point** — daily brief + scorecard CLI | `run_brief()`, `_run_scorecard()`, `--scorecard --date` |
 | `main.py` | FastAPI REST API (6 endpoints) | `/api/health`, `/api/predictions`, `/api/markets`, `/api/divergences`, `/api/trades`, `/api/brief/run` |
 | `ingestion/google_news.py` | Google News RSS poller (free, 5-15min) | `fetch_google_news()`, `NewsEvent` |
 | `ingestion/gdelt_doc.py` | GDELT DOC 2.0 API poller (free, 15-60min) | `fetch_gdelt_docs()` |
-| `ingestion/gdelt.py` | GDELT BigQuery pipeline (4-stage filter) | `volume_gate()`, `structural_dedup()` |
 | `ingestion/oil_prices.py` | EIA API v2 fetcher (Brent/WTI) | `fetch_brent()`, `fetch_wti()` |
 | `ingestion/entities.py` | 30+ critical entity list for filtering | `matches_critical_entity()` |
-| `ingestion/dedup.py` | Semantic dedup (sentence-transformers) | `SemanticDeduplicator` |
+| `ingestion/truth_social.py` | Truth Social POTUS feed via truthbrush | `fetch_truth_social()` |
 | `markets/kalshi.py` | Kalshi API client (RSA-PSS auth) | `KalshiClient`, `IRAN_EVENT_TICKERS` |
 | `markets/polymarket.py` | Polymarket read-only client | `PolymarketClient` |
 | `markets/schemas.py` | Shared market data models | `MarketPrice`, `Orderbook`, `Position`, `PaperTrade` |
@@ -238,20 +240,29 @@ EIA_API_KEY              # Optional — EIA oil price data
 | `prediction/ceasefire.py` | Ceasefire probability predictor | `CeasefirePredictor` (LLM) |
 | `prediction/hormuz.py` | Hormuz reopening predictor | `HormuzReopeningPredictor` (cascade + LLM) |
 | `prediction/schemas.py` | Prediction output model | `PredictionOutput` |
+| `contracts/registry.py` | Contract registry + proxy classification | `ContractRegistry`, `ProxyClass` |
+| `contracts/mapping_policy.py` | Proxy-aware signal mapping with cost model | `MappingPolicy`, `MappingResult` |
+| `contracts/schemas.py` | Contract + mapping data models | `ContractRecord`, `MappingCostInputs` |
 | `divergence/detector.py` | Model vs market comparison | `DivergenceDetector`, `Divergence` |
-| `scoring/tracker.py` | Paper trade tracking + P&L | `PaperTradeTracker`, `TradeRecord` |
-| `budget/tracker.py` | $20/day LLM budget enforcement | `BudgetTracker` |
-| `agents/schemas.py` | Agent output Pydantic models | `AgentPrediction`, `AgentDecision` |
-| `agents/runner.py` | LLM execution with prompt caching | `AgentRunner` |
+| `scoring/ledger.py` | Signal ledger — append-only signal records | `SignalLedger`, `SignalRecord` |
+| `scoring/tracker.py` | Paper trade execution + order lifecycle | `PaperTradeTracker` |
+| `scoring/prediction_log.py` | Prediction persistence with run_id | `PredictionLogger` |
+| `scoring/calibration.py` | Hit rate, calibration curve, edge decay queries | `calibration_report()` |
+| `scoring/report_card.py` | P&L report card by proxy class | `generate_report_card()` |
+| `scoring/recalibration.py` | Bucket-based probability recalibration | `recalibrate_probability()` |
+| `scoring/resolution.py` | Settlement polling + outcome backfill | `check_resolutions()` |
+| `scoring/scorecard.py` | **Daily scorecard ETL** — 15+ metrics across 5 categories | `compute_daily_scorecard()` |
+| `portfolio/allocator.py` | Quarter-Kelly position sizing | `PortfolioAllocator` |
+| `budget/tracker.py` | $20/day LLM budget + cost persistence | `BudgetTracker` (writes to `llm_usage`) |
+| `ops/alerts.py` | Alert dispatcher with DuckDB + webhook sinks | `AlertDispatcher`, `DuckDBAlertSink` |
+| `ops/runtime.py` | Runtime config (data/execution environment) | `RuntimeConfig`, `resolve_runtime_config()` |
 | `simulation/cascade.py` | 6-rule cascade engine | `CascadeEngine` (blockade→flow→bypass→price→downstream→insurance) |
-| `simulation/engine.py` | Discrete event simulation | `SimulationEngine`, `SimEvent`, `ClockMode` |
 | `simulation/world_state.py` | In-memory world state | `WorldState`, `CellState` |
 | `simulation/config.py` | YAML scenario config | `ScenarioConfig`, `load_scenario_config()` |
-| `simulation/circuit_breaker.py` | Escalation limiter | `CircuitBreaker` |
-| `db/schema.py` | DuckDB schema (12 tables) | `create_tables()` |
+| `dashboard/data.py` | Reusable query functions for dashboard/API | `get_latest_brief()`, `get_signal_history()` |
+| `db/schema.py` | DuckDB schema (20+ tables) + migrations | `create_tables()` |
 | `db/writer.py` | Async single-writer queue | `DbWriter` |
-| `db/queries.py` | Read-only query functions | `get_world_state_at_tick()` |
-| `spatial/h3_utils.py` | H3 hexagonal grid ops | `lat_lng_to_cell_for_zone()` |
+| `db/runtime.py` | DuckDB path + environment resolution | `RuntimeConfig` |
 
 ### Data Flow
 
