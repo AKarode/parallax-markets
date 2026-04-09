@@ -2,14 +2,14 @@
 
 ## Overview
 
-Parallax is a working CLI prediction market edge-finder. The pipeline runs end-to-end: news ingestion (Google News RSS + GDELT DOC) -> 3 prediction models (Claude Sonnet) -> market price comparison (Kalshi + Polymarket) -> divergence detection -> paper trading (Kalshi sandbox). 120 tests passing. Dead code pruned April 8 2026.
+Parallax is a working CLI prediction market edge-finder. The pipeline runs end-to-end: news ingestion (Google News RSS + GDELT DOC) -> 3 prediction models (Claude Sonnet) -> contract-aware market mapping -> divergence detection -> paper trading (Kalshi sandbox). 192 tests passing. Dead code pruned April 8 2026.
 
 The roadmap strengthens the pipeline's trustworthiness and expands its scope. Build order: contract alignment first (fixes the biggest structural weakness -- heuristic ticker mapping), then prediction persistence (needed for calibration), then paper trading evaluation (proves edge with P&L), then deployment hardening, then thesis expansion.
 
 ## Phases
 
-- [ ] **Phase 1: Contract Registry + Mapping Policy + Evaluation Ledger** - Formal proposition alignment between model predictions and tradeable contracts
-- [ ] **Phase 2: Prediction Persistence + Calibration** - Persist every prediction with full context, enable calibration analysis
+- [x] **Phase 1: Contract Registry + Mapping Policy + Evaluation Ledger** - Formal proposition alignment between model predictions and tradeable contracts
+- [x] **Phase 2: Prediction Persistence + Calibration** - Persist every prediction with full context, enable calibration analysis
 - [ ] **Phase 3: Paper Trading Evaluation** - Contract-level P&L tracking to prove or disprove edge
 - [ ] **Phase 4: Deployment Fixes** - Docker reliability, API hydration, error handling, structured logging
 - [ ] **Phase 5: Second Thesis Expansion** - Expand beyond Iran/Hormuz to additional prediction market opportunities
@@ -57,7 +57,12 @@ Plans:
   3. Summary report shows total P&L, win rate, average edge at entry, and whether edge is statistically significant
   4. Automated daily pipeline runs (cron/scheduled) accumulate prediction + signal history
   5. Calibration-driven parameter tuning: discount factors, min_edge threshold, and model prompts adjusted based on where predictions were wrong
-**Plans:** TBD
+**Plans:** 4 plans
+Plans:
+- [ ] 03-01-PLAN.md — Automated operations: --scheduled CLI flag with JSON output, cron wrapper script, health check, crontab installer
+- [ ] 03-02-PLAN.md — Report card CLI (P&L by proxy class, significance test), proxy_was_aligned backfill, Streamlit dashboard with reusable data layer
+- [ ] 03-03-PLAN.md — Track record injection: build_track_record() utility, db_conn on predictors, {track_record} prompt placeholder
+- [ ] 03-04-PLAN.md — Mechanical recalibration: bucket-based probability adjustment, MappingPolicy threshold auto-tuning, suggested_size advisory
 
 ### Phase 4: Deployment Fixes
 **Goal:** The system runs reliably in Docker with hydrated API endpoints and proper error handling.
@@ -92,8 +97,8 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Contract Registry + Mapping Policy | 0/3 | Planning complete | - |
-| 2. Prediction Persistence + Calibration | 0/3 | Planning complete | - |
-| 3. Paper Trading Evaluation | 0/TBD | Not started | - |
+| 1. Contract Registry + Mapping Policy | 3/3 | Completed | 2026-04-08 |
+| 2. Prediction Persistence + Calibration | 3/3 | Completed | 2026-04-08 |
+| 3. Paper Trading Evaluation | 0/4 | Not started | - |
 | 4. Deployment Fixes | 0/TBD | Not started | - |
 | 5. Second Thesis Expansion | 0/TBD | Not started | - |
