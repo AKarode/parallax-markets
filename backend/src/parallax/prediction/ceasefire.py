@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+import duckdb
+
 from parallax.budget.tracker import BudgetTracker
 from parallax.prediction.schemas import PredictionOutput
 
@@ -33,6 +35,9 @@ Additional context:
 
 Current market prices:
 {market_prices_text}
+
+## YOUR TRACK RECORD
+{track_record}
 
 Consider what the market may already be pricing in and where it might be wrong.
 
@@ -66,6 +71,7 @@ class CeasefirePredictor:
         recent_events: list[dict],
         current_negotiations: str | None = None,
         market_prices: list[dict] | None = None,
+        db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run ceasefire prediction pipeline.
 
@@ -73,6 +79,13 @@ class CeasefirePredictor:
         2. Feed to Claude Sonnet
         3. Parse structured response
         """
+        # Build track record for prompt injection
+        if db_conn is not None:
+            from parallax.scoring.track_record import build_track_record
+            track_record = build_track_record("ceasefire", db_conn)
+        else:
+            track_record = "No track record available yet."
+
         # Step 1: Filter for diplomatic events
         diplomatic = self._filter_diplomatic(recent_events)
 
@@ -84,6 +97,7 @@ class CeasefirePredictor:
             diplomatic_events=events_text,
             context=context,
             market_prices_text=self._format_market_prices(market_prices),
+            track_record=track_record,
         )
 
         response = await self._client.messages.create(

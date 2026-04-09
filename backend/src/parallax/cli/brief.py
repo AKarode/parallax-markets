@@ -278,21 +278,27 @@ async def run_brief(
             for mp in market_prices
         ]
 
-        # Run predictions (parallel)
+        # Move DB connection before predictions (needed for track record injection)
+        db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+        conn = duckdb.connect(db_path)
+        create_tables(conn)
+
+        # Run predictions (parallel) with db_conn for track record injection
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
 
         predictions = list(await asyncio.gather(
-            oil_pred.predict(events, prices, world_state, market_prices=mp_dicts),
-            ceasefire_pred.predict(events, market_prices=mp_dicts),
-            hormuz_pred.predict(events, world_state, market_prices=mp_dicts),
+            oil_pred.predict(events, prices, world_state, market_prices=mp_dicts, db_conn=conn),
+            ceasefire_pred.predict(events, market_prices=mp_dicts, db_conn=conn),
+            hormuz_pred.predict(events, world_state, market_prices=mp_dicts, db_conn=conn),
         ))
 
     # Initialize contract registry, prediction logger, and signal ledger
-    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-    conn = duckdb.connect(db_path)
-    create_tables(conn)
+    if dry_run:
+        db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+        conn = duckdb.connect(db_path)
+        create_tables(conn)
     registry = ContractRegistry(conn)
     registry.seed_initial_contracts()
     policy = MappingPolicy(registry=registry, min_effective_edge_pct=5.0)

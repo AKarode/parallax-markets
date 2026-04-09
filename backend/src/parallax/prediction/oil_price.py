@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+import duckdb
+
 from parallax.budget.tracker import BudgetTracker
 from parallax.prediction.schemas import PredictionOutput
 from parallax.simulation.cascade import CascadeEngine
@@ -34,6 +36,9 @@ Current EIA price data:
 
 Current market prices:
 {market_prices_text}
+
+## YOUR TRACK RECORD
+{track_record}
 
 Consider what the market may already be pricing in and where it might be wrong.
 
@@ -67,6 +72,7 @@ class OilPricePredictor:
         current_prices: list[dict],
         world_state: WorldState,
         market_prices: list[dict] | None = None,
+        db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run oil price prediction pipeline.
 
@@ -74,6 +80,13 @@ class OilPricePredictor:
         2. Feed results + events to Claude Sonnet
         3. Parse structured response
         """
+        # Build track record for prompt injection
+        if db_conn is not None:
+            from parallax.scoring.track_record import build_track_record
+            track_record = build_track_record("oil_price", db_conn)
+        else:
+            track_record = "No track record available yet."
+
         # Step 1: Cascade analysis
         supply_loss = 0.0
         bypass_flow = 0.0
@@ -109,6 +122,7 @@ class OilPricePredictor:
             events_summary=events_summary,
             price_data=price_data,
             market_prices_text=self._format_market_prices(market_prices),
+            track_record=track_record,
         )
 
         response = await self._client.messages.create(
