@@ -118,11 +118,18 @@ def _backfill_signal(
                 WHEN signal = 'BUY_NO' AND ? <= 0.5 THEN true
                 WHEN signal IN ('BUY_YES', 'BUY_NO') THEN false
                 ELSE NULL
+            END,
+            proxy_was_aligned = CASE
+                WHEN signal = 'BUY_YES' AND ? > 0.5 THEN true
+                WHEN signal = 'BUY_NO' AND ? <= 0.5 THEN true
+                WHEN signal IN ('BUY_YES', 'BUY_NO') THEN false
+                ELSE NULL
             END
         WHERE contract_ticker = ?
           AND resolution_price IS NULL
         """,
         [resolution_price, resolved_at_str,
+         resolution_price, resolution_price,
          resolution_price, resolution_price,
          resolution_price, resolution_price,
          ticker],
