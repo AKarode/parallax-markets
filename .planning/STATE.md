@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-04-08T21:42:03.034Z"
+stopped_at: Phase 3 context gathered
+last_updated: "2026-04-09T00:50:59.167Z"
 last_activity: 2026-04-08
 progress:
   total_phases: 5
@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-08)
 
 **Core value:** Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects.
-**Current focus:** Phase 1: Contract Registry + Mapping Policy + Evaluation Ledger
+**Current focus:** Phase 3: Paper Trading Evaluation + Continuous Improvement
 
 ## Current Position
 
@@ -66,9 +66,10 @@ Recent decisions affecting current work:
 - Pivot: P&L is the eval -- prediction market resolution replaces manual ground truth scoring
 - Pivot: Ship in days not months -- 2-week ceasefire window is validation deadline
 - Retained: GDELT DOC ingestion, cascade engine, DuckDB, budget tracker from prior branches
-- Dead code pruning April 8 2026: deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/h3_utils.py, ingestion/gdelt.py (BigQuery), ingestion/dedup.py, db/queries.py, frontend/ directory, 3 dead test files. 120 tests still passing.
+- Dead code pruning April 8 2026: deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/h3_utils.py, ingestion/gdelt.py (BigQuery), ingestion/dedup.py, db/queries.py, frontend/ directory, 3 dead test files. The current suite is 192 passing tests.
 - CLI-first over frontend dashboard -- deleted React/Vite/deck.gl frontend
 - Google News RSS as primary news source over GDELT BigQuery pipeline
+- Phase 2 completed April 8 2026: prediction persistence, resolution backfill, and calibration reporting are all verified
 
 ### Pending Todos
 
@@ -79,7 +80,7 @@ None yet.
 - Ceasefire window: 2 weeks from April 7 -- must have paper trading running before it expires
 - Kalshi API auth requires RSA key pair generation from account settings
 - Polymarket technically restricted for US users -- read-only data access is fine
-- Contract mapping is heuristic (`_map_predictions_to_markets()`) -- Phase 1 fixes this
+- Need enough resolved signals and paper trades to produce meaningful Phase 3 P&L segmentation by proxy class
 
 ### Quick Tasks Completed
 
@@ -90,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-08T21:06:35.449Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-prediction-persistence-calibration/02-CONTEXT.md
+Last session: 2026-04-09T00:50:59.159Z
+Stopped at: Phase 3 context gathered
+Resume file: .planning/phases/03-paper-trading-evaluation-continuous-improvement/03-CONTEXT.md
