@@ -63,7 +63,7 @@ Plans:
 - [x] 03-02-PLAN.md — Report card CLI (P&L by proxy class, significance test), proxy_was_aligned backfill, Streamlit dashboard with reusable data layer
 - [x] 03-03-PLAN.md — Track record injection: build_track_record() utility, db_conn on predictors, {track_record} prompt placeholder
 - [x] 03-04-PLAN.md — Mechanical recalibration: bucket-based probability adjustment, MappingPolicy threshold auto-tuning, suggested_size advisory
-- [ ] 03-05-PLAN.md — Gap closure: discount factor auto-adjustment from hit_rate_by_proxy_class calibration data
+- [x] 03-05-PLAN.md — Gap closure: discount factor auto-adjustment from hit_rate_by_proxy_class calibration data
 
 ### Phase 4: Deployment Fixes
 **Goal:** The system runs reliably in Docker with hydrated API endpoints and proper error handling.
