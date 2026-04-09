@@ -256,6 +256,14 @@ async def run_brief(
     budget = BudgetTracker(daily_cap_usd=20.0)
     run_id = str(uuid.uuid4())
 
+    # Initialize DB connection early -- needed for track record injection (non-dry-run)
+    # and contract registry/signal ledger (both paths)
+    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+    conn = duckdb.connect(db_path)
+    create_tables(conn)
+
+    events: list[dict] = []
+
     if dry_run:
         predictions = _make_dry_run_predictions()
         market_prices = _make_dry_run_markets()
@@ -280,11 +288,6 @@ async def run_brief(
             for mp in market_prices
         ]
 
-        # Move DB connection before predictions (needed for track record injection)
-        db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-        conn = duckdb.connect(db_path)
-        create_tables(conn)
-
         # Run predictions (parallel) with db_conn for track record injection
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
@@ -297,10 +300,6 @@ async def run_brief(
         ))
 
     # Initialize contract registry, prediction logger, and signal ledger
-    if dry_run:
-        db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-        conn = duckdb.connect(db_path)
-        create_tables(conn)
     registry = ContractRegistry(conn)
     registry.seed_initial_contracts()
     policy = MappingPolicy(registry=registry, min_effective_edge_pct=5.0)

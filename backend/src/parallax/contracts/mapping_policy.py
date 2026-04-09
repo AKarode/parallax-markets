@@ -7,8 +7,10 @@ with explicit proposition alignment and confidence discounting.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-import duckdb
+if TYPE_CHECKING:
+    import duckdb
 
 from parallax.contracts.registry import ContractRegistry
 from parallax.contracts.schemas import MappingResult, ProxyClass
