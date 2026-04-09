@@ -373,24 +373,14 @@ async def run_brief(
             _fetch_polymarket_markets(),
         )
         market_prices = kalshi_markets + poly_markets
-        market_context = [
-            {
-                "ticker": market.ticker,
-                "derived_yes_price": market.yes_price,
-                "best_yes_ask": market.best_yes_ask,
-                "best_no_ask": market.best_no_ask,
-                "source": market.source,
-            }
-            for market in market_prices
-        ]
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
         predictions = list(
             await asyncio.gather(
-                oil_pred.predict(events, prices, world_state, market_prices=market_context, db_conn=conn),
-                ceasefire_pred.predict(events, market_prices=market_context, db_conn=conn),
-                hormuz_pred.predict(events, world_state, market_prices=market_context, db_conn=conn),
+                oil_pred.predict(events, prices, world_state, db_conn=conn),
+                ceasefire_pred.predict(events, db_conn=conn),
+                hormuz_pred.predict(events, world_state, db_conn=conn),
             ),
         )
 

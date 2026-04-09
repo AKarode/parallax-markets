@@ -34,13 +34,8 @@ Recent GDELT events:
 Current EIA price data:
 {price_data}
 
-Current market prices:
-{market_prices_text}
-
 ## YOUR TRACK RECORD
 {track_record}
-
-Consider what the market may already be pricing in and where it might be wrong.
 
 Output ONLY valid JSON (no markdown):
 {{
@@ -71,7 +66,6 @@ class OilPricePredictor:
         recent_events: list[dict],
         current_prices: list[dict],
         world_state: WorldState,
-        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run oil price prediction pipeline.
@@ -121,7 +115,6 @@ class OilPricePredictor:
             current_price=current_price,
             events_summary=events_summary,
             price_data=price_data,
-            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
@@ -209,11 +202,3 @@ class OilPricePredictor:
             lines.append(f"- {period}: ${value}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _format_market_prices(market_prices: list[dict] | None) -> str:
-        if not market_prices:
-            return "No market prices available."
-        lines = []
-        for mp in market_prices:
-            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
-        return "\n".join(lines)
