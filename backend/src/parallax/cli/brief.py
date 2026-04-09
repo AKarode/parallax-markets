@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -186,12 +187,66 @@ def _format_brief(
     return "\n".join(lines)
 
 
-async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
+def _write_scheduled_output(
+    run_id: str,
+    predictions: list[PredictionOutput],
+    signals: list,
+    divergence_count: int,
+    log_dir: Path | None = None,
+) -> Path:
+    """Write structured JSON output for scheduled/cron runs.
+
+    Args:
+        run_id: Unique run identifier.
+        predictions: List of PredictionOutput from this run.
+        signals: List of signal records from this run.
+        divergence_count: Number of divergences detected.
+        log_dir: Override log directory (default: ~/parallax-logs).
+
+    Returns:
+        Path to the written JSON file.
+    """
+    base_dir = log_dir if log_dir is not None else Path.home() / "parallax-logs"
+    runs_dir = base_dir / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    output = {
+        "run_id": run_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "predictions": [p.model_dump() for p in predictions],
+        "signals": [
+            {
+                "signal_id": getattr(s, "signal_id", ""),
+                "model_id": getattr(s, "model_id", ""),
+                "contract_ticker": getattr(s, "contract_ticker", ""),
+                "proxy_class": getattr(s, "proxy_class", ""),
+                "effective_edge": getattr(s, "effective_edge", 0.0),
+                "signal": getattr(s, "signal", ""),
+            }
+            for s in signals
+        ],
+        "divergence_count": divergence_count,
+    }
+
+    output_path = runs_dir / f"{run_id}.json"
+    output_path.write_text(json.dumps(output, indent=2, default=str))
+    logger.info("Scheduled output written to %s", output_path)
+    return output_path
+
+
+async def run_brief(
+    dry_run: bool = False,
+    no_trade: bool = False,
+    scheduled: bool = False,
+    log_dir: Path | None = None,
+) -> str:
     """Run the full intelligence brief pipeline.
 
     Args:
         dry_run: Skip LLM calls, use mock predictions.
         no_trade: Show signals but do not execute paper trades.
+        scheduled: Write structured JSON output for cron/automated runs.
+        log_dir: Override log directory for scheduled output (default: ~/parallax-logs).
 
     Returns:
         Formatted brief as string.
@@ -315,6 +370,17 @@ async def run_brief(dry_run: bool = False, no_trade: bool = False) -> str:
     # Format and output
     brief = _format_brief(predictions, market_prices, divergences, budget, trade_table, signals=all_signals)
     print(brief)
+
+    # Write structured JSON for scheduled/cron runs
+    if scheduled:
+        _write_scheduled_output(
+            run_id=run_id,
+            predictions=predictions,
+            signals=all_signals,
+            divergence_count=len(divergences),
+            log_dir=log_dir,
+        )
+
     return brief
 
 
@@ -598,6 +664,11 @@ def main():
         action="store_true",
         help="Print calibration report (requires 7+ days of data)",
     )
+    parser.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Write structured JSON output to ~/parallax-logs/runs/ for cron automation",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -613,7 +684,7 @@ def main():
         _run_calibration()
         return
 
-    asyncio.run(run_brief(dry_run=args.dry_run, no_trade=args.no_trade))
+    asyncio.run(run_brief(dry_run=args.dry_run, no_trade=args.no_trade, scheduled=args.scheduled))
 
 
 if __name__ == "__main__":
