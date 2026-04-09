@@ -111,7 +111,7 @@ def _css() -> None:
     .pred-why {
         font-family:'Instrument Sans',sans-serif; font-size:0.65rem;
         color:#3f3f46; line-height:1.35; margin-top:0.3rem;
-        display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+        display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
     }
     .cg { color:var(--green); } .cr { color:var(--red); } .ci { color:var(--indigo); }
 
@@ -273,7 +273,7 @@ def main() -> None:
             cls = "cg pred-up" if d == "increase" else ("cr pred-dn" if d == "decrease" else "ci pred-st")
             arrow = "&#8593;" if d == "increase" else ("&#8595;" if d == "decrease" else "&#8596;")
             name = pred["model_id"].replace("_", " ")
-            why = (pred.get("reasoning") or "")[:90]
+            why = (pred.get("reasoning") or "")[:160]
             cards += f"""<div class="pred {cls.split()[-1]}">
                 <div class="pred-name">{name}</div>
                 <div class="pred-row">
