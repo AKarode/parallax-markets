@@ -425,6 +425,18 @@ def _run_calibration() -> None:
     conn.close()
 
 
+def _run_report_card() -> None:
+    """Run P&L report card and print to stdout."""
+    from parallax.scoring.report_card import generate_report_card
+
+    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
+    conn = duckdb.connect(db_path)
+    create_tables(conn)
+    report = generate_report_card(conn)
+    print(report)
+    conn.close()
+
+
 def _map_predictions_to_markets_legacy(
     predictions: list[PredictionOutput],
     market_prices: list[MarketPrice],
@@ -669,6 +681,11 @@ def main():
         action="store_true",
         help="Write structured JSON output to ~/parallax-logs/runs/ for cron automation",
     )
+    parser.add_argument(
+        "--report-card",
+        action="store_true",
+        help="Print P&L report card with proxy class segmentation",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -682,6 +699,10 @@ def main():
 
     if args.calibration:
         _run_calibration()
+        return
+
+    if args.report_card:
+        _run_report_card()
         return
 
     asyncio.run(run_brief(dry_run=args.dry_run, no_trade=args.no_trade, scheduled=args.scheduled))
