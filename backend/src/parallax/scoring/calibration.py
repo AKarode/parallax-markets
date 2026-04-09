@@ -47,15 +47,28 @@ def hit_rate_by_proxy_class(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     ]
 
 
-def calibration_curve(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+def calibration_curve(
+    conn: duckdb.DuckDBPyConnection,
+    model_id: str | None = None,
+) -> list[dict]:
     """Return calibration curve with 5 probability buckets.
 
     Buckets: 0-20%, 20-40%, 40-60%, 60-80%, 80-100%.
 
+    Args:
+        conn: DuckDB connection.
+        model_id: Optional model filter. If None, returns global curve.
+
     Returns:
         List of dicts with keys: bucket, n, avg_predicted, actual_rate.
     """
-    rows = conn.execute("""
+    where_clause = "WHERE model_was_correct IS NOT NULL"
+    params: list = []
+    if model_id is not None:
+        where_clause += " AND model_id = ?"
+        params.append(model_id)
+
+    rows = conn.execute(f"""
         SELECT
             CASE
                 WHEN model_probability < 0.2 THEN '0-20%'
@@ -68,10 +81,10 @@ def calibration_curve(conn: duckdb.DuckDBPyConnection) -> list[dict]:
             ROUND(AVG(model_probability), 3) AS avg_predicted,
             ROUND(AVG(CASE WHEN model_was_correct THEN 1.0 ELSE 0.0 END), 3) AS actual_rate
         FROM signal_ledger
-        WHERE model_was_correct IS NOT NULL
+        {where_clause}
         GROUP BY bucket
         ORDER BY bucket
-    """).fetchall()
+    """, params).fetchall()
 
     return [
         {
