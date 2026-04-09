@@ -369,6 +369,9 @@ class KalshiClient:
     async def get_order(self, order_id: str) -> dict:
         return await self._request("GET", f"/portfolio/orders/{order_id}")
 
+    async def cancel_order(self, order_id: str) -> dict:
+        return await self._request("DELETE", f"/portfolio/orders/{order_id}")
+
     async def get_positions(self) -> list[Position]:
         data = await self._request("GET", "/portfolio/positions")
         positions = []
