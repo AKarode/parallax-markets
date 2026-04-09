@@ -35,6 +35,15 @@ class MappingPolicy:
         ProxyClass.NONE: 0.0,
     }
 
+    DISCOUNT_BOUNDS: dict[ProxyClass, tuple[float, float]] = {
+        ProxyClass.DIRECT: (0.8, 1.0),
+        ProxyClass.NEAR_PROXY: (0.2, 0.8),
+        ProxyClass.LOOSE_PROXY: (0.1, 0.5),
+        ProxyClass.NONE: (0.0, 0.0),
+    }
+
+    MIN_SIGNALS_FOR_DISCOUNT = 5
+
     def __init__(
         self,
         registry: ContractRegistry,
@@ -102,6 +111,53 @@ class MappingPolicy:
 
         results.sort(key=lambda r: abs(r.effective_edge), reverse=True)
         return results
+
+    def update_discounts_from_history(self, conn: duckdb.DuckDBPyConnection) -> None:
+        """Auto-adjust proxy class discount factors based on historical hit rate.
+
+        Uses hit_rate_by_proxy_class() from calibration data. For each proxy class
+        with sufficient resolved signals (>= MIN_SIGNALS_FOR_DISCOUNT), computes
+        a bounded EMA adjustment: new = default * 0.7 + hit_rate * 0.3.
+
+        Bounds enforce safety: DIRECT never below 0.8, LOOSE_PROXY never above 0.5.
+        """
+        from parallax.scoring.calibration import hit_rate_by_proxy_class
+
+        rows = hit_rate_by_proxy_class(conn)
+        if not rows:
+            return
+
+        for row in rows:
+            proxy_class_str = row["proxy_class"]
+            total = row["total"]
+            hit_rate = row["hit_rate"]
+
+            if total < self.MIN_SIGNALS_FOR_DISCOUNT:
+                continue
+
+            try:
+                proxy_class = ProxyClass(proxy_class_str)
+            except ValueError:
+                continue
+
+            if proxy_class == ProxyClass.NONE:
+                continue
+
+            default_discount = self.DEFAULT_DISCOUNTS[proxy_class]
+            new_discount = default_discount * 0.7 + hit_rate * 0.3
+            lo, hi = self.DISCOUNT_BOUNDS[proxy_class]
+            new_discount = round(max(lo, min(hi, new_discount)), 2)
+
+            conn.execute(
+                "UPDATE contract_proxy_map SET confidence_discount = ? WHERE proxy_class = ?",
+                [new_discount, proxy_class_str],
+            )
+
+            logger.info(
+                "Adjusted discount for %s: %.2f -> %.2f (hit_rate=%.1f%%, n=%d)",
+                proxy_class_str, default_discount, new_discount,
+                hit_rate * 100, total,
+            )
 
     def update_thresholds_from_history(self, conn: duckdb.DuckDBPyConnection) -> None:
         """Auto-adjust per-class min_edge thresholds based on edge_decay history.
