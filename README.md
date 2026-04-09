@@ -10,8 +10,13 @@ The repo now treats pricing and trading honestly:
 
 - executable quotes are explicit: `best_yes_bid`, `best_yes_ask`, `best_no_bid`, `best_no_ask`
 - derived prices are labeled and never used as execution inputs
-- signals can be `tradable`, `degraded`, or `non_tradable`
+- signals can be `tradable`, `degraded`, `non_tradable`, or `STALE_QUOTE`
+- LLM predictions are independent — market prices are never shown to the model to prevent anchoring
+- edge is computed net of Kalshi taker fees ($0.07) and slippage buffer via `CostModel`
+- stale quotes (older than configurable threshold) are rejected before edge calculation
+- position sizing uses quarter-Kelly (edge-proportional) instead of flat 10-contract default
 - paper trading records `signal -> order attempt -> accepted/rejected/cancelled -> fill -> open position -> closed position`
+- portfolio allocator enforces hard risk caps: notional, position count, daily loss, theme exposure
 - trading report cards use only actually filled and later closed paper positions
 - signal-quality analysis remains available separately through counterfactual evaluation
 - dry-run data is isolated from demo/live data by default
@@ -137,6 +142,8 @@ Key views:
 backend/src/parallax/
   cli/brief.py              brief orchestration, market persistence, paper execution
   main.py                   FastAPI API
+  costs/
+    fee_model.py            transaction cost model (Kalshi taker fees + slippage)
   contracts/
     mapping_policy.py       executable edge selection + proxy discounting
     registry.py             contract registry
@@ -149,7 +156,7 @@ backend/src/parallax/
     schema.py               DuckDB schema + additive migrations
     writer.py               async writer helper
   divergence/
-    detector.py             executable-entry divergence detector
+    detector.py             cost-aware divergence detector with staleness guard
   markets/
     kalshi.py               Kalshi normalization, orderbook handling, sandbox orders
     polymarket.py           Polymarket executable/derived quote normalization
@@ -176,11 +183,14 @@ cd backend
 python -m pytest tests/ -x -v
 ```
 
-The executable-pricing and journal refactor is covered by focused tests for:
+The executable-pricing, journal, and signal integrity layers are covered by focused tests for:
 
 - Kalshi normalization
 - Polymarket normalization
-- divergence detection
+- divergence detection (with cost model and staleness guard)
+- fee + slippage cost model
+- quarter-Kelly position sizing
+- market price removal from LLM prompts
 - mapping policy
 - signal ledger
 - resolution backfill
@@ -189,7 +199,7 @@ The executable-pricing and journal refactor is covered by focused tests for:
 
 ## Current Limitations
 
-- accepted-but-resting orders are recorded, but there is not yet a background reconciler for later partial fills
-- slippage and fee modeling are still thin outside venue response fields
-- there are no hard portfolio/risk controls yet
+- accepted-but-resting orders are recorded; `poll_resting_orders()` reconciles fills but is not yet called on a background schedule
+- cost model, staleness guard, and Kelly sizing modules are built but not yet wired into the `brief.py` production path
 - live trading remains out of scope; this is still a paper-trading system
+- LLM probability calibration is unvalidated — need 30+ resolved signals before trusting edge estimates
