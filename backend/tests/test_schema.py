@@ -27,6 +27,10 @@ def test_create_tables_creates_all_expected_tables(db):
         "trade_positions",
         "signal_quality_evaluation",
         "trade_evaluation",
+        "runs",
+        "daily_scorecard",
+        "llm_usage",
+        "ops_events",
     }
     assert expected == table_names
 

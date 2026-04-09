@@ -252,7 +252,9 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             timeframe VARCHAR NOT NULL,
             news_context JSON,
             cascade_inputs JSON,
-            created_at TIMESTAMP NOT NULL
+            created_at TIMESTAMP NOT NULL,
+            experiment_id TEXT,
+            variant TEXT
         )
     """)
 
@@ -321,7 +323,9 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             realized_pnl DOUBLE,
             counterfactual_pnl DOUBLE,
             model_was_correct BOOLEAN,
-            proxy_was_aligned BOOLEAN
+            proxy_was_aligned BOOLEAN,
+            experiment_id TEXT,
+            variant TEXT
         )
     """)
 
@@ -350,7 +354,9 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             last_update_at TIMESTAMP,
             filled_quantity INTEGER DEFAULT 0,
             avg_fill_price DOUBLE,
-            raw_response JSON
+            raw_response JSON,
+            experiment_id TEXT,
+            variant TEXT
         )
     """)
 
@@ -393,7 +399,9 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             realized_pnl DOUBLE,
             unrealized_pnl DOUBLE,
             resolution_price DOUBLE,
-            resolution_source VARCHAR
+            resolution_source VARCHAR,
+            experiment_id TEXT,
+            variant TEXT
         )
     """)
     conn.execute("""
@@ -443,10 +451,36 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ops_events (
+            event_id TEXT PRIMARY KEY,
+            run_id TEXT,
+            event_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            message TEXT NOT NULL,
+            details TEXT,
+            created_at TIMESTAMPTZ DEFAULT current_timestamp
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            usage_id TEXT PRIMARY KEY,
+            run_id TEXT,
+            model_id TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            cost_usd DOUBLE NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT current_timestamp
+        )
+    """)
+
 
 def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
     if _table_exists(conn, "prediction_log"):
         _add_column_if_missing(conn, "prediction_log", "data_environment", "VARCHAR DEFAULT 'live'")
+        _add_column_if_missing(conn, "prediction_log", "experiment_id", "TEXT")
+        _add_column_if_missing(conn, "prediction_log", "variant", "TEXT")
 
     if _table_exists(conn, "market_prices"):
         _add_column_if_missing(conn, "market_prices", "data_environment", "VARCHAR DEFAULT 'live'")
@@ -502,6 +536,8 @@ def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
         _add_column_if_missing(conn, "signal_ledger", "quote_age_seconds", "DOUBLE")
         _add_column_if_missing(conn, "signal_ledger", "staleness_threshold_seconds", "DOUBLE")
         _add_column_if_missing(conn, "signal_ledger", "quote_is_stale", "BOOLEAN DEFAULT false")
+        _add_column_if_missing(conn, "signal_ledger", "experiment_id", "TEXT")
+        _add_column_if_missing(conn, "signal_ledger", "variant", "TEXT")
 
         if _table_exists(conn, "contract_registry"):
             _add_column_if_missing(conn, "contract_registry", "contract_family", "VARCHAR")
@@ -549,6 +585,14 @@ def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
                 SET realized_pnl = COALESCE(realized_pnl, counterfactual_pnl)
                 WHERE counterfactual_pnl IS NOT NULL AND realized_pnl IS NULL
             """)
+
+    if _table_exists(conn, "trade_orders"):
+        _add_column_if_missing(conn, "trade_orders", "experiment_id", "TEXT")
+        _add_column_if_missing(conn, "trade_orders", "variant", "TEXT")
+
+    if _table_exists(conn, "trade_positions"):
+        _add_column_if_missing(conn, "trade_positions", "experiment_id", "TEXT")
+        _add_column_if_missing(conn, "trade_positions", "variant", "TEXT")
 
 
 def _create_views(conn: duckdb.DuckDBPyConnection) -> None:

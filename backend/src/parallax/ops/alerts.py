@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+import duckdb
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -93,6 +96,36 @@ class MockWebhookAlertSink:
 
 
 @dataclass
+class DuckDBAlertSink:
+    """Persist operational alerts into DuckDB for later inspection."""
+
+    db_conn: duckdb.DuckDBPyConnection
+    run_id: str | None = None
+
+    async def send(self, event: AlertEvent) -> None:
+        self.db_conn.execute(
+            """
+            INSERT INTO ops_events (
+                event_id,
+                run_id,
+                event_type,
+                severity,
+                message,
+                details
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                str(uuid.uuid4()),
+                self.run_id,
+                event.event_type,
+                event.severity,
+                event.message,
+                json.dumps(event.details),
+            ],
+        )
+
+
+@dataclass
 class AlertDispatcher:
     """Dispatch alerts to one or more sinks, isolating sink failures."""
 
@@ -124,10 +157,15 @@ class AlertDispatcher:
         return event
 
 
-def build_alert_dispatcher() -> AlertDispatcher:
+def build_alert_dispatcher(
+    db_conn: duckdb.DuckDBPyConnection | None = None,
+    run_id: str | None = None,
+) -> AlertDispatcher:
     """Create the default alert dispatcher for API/CLI entrypoints."""
 
     sinks: list[AlertSink] = [LoggerAlertSink()]
+    if db_conn is not None:
+        sinks.append(DuckDBAlertSink(db_conn=db_conn, run_id=run_id))
     webhook_url = os.environ.get("PARALLAX_ALERT_WEBHOOK_URL", "").strip()
     if webhook_url:
         if webhook_url.startswith("mock://"):

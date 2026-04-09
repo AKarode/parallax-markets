@@ -70,8 +70,8 @@ class TestLogPrediction:
         assert len(rows) == 1
         row = rows[0]
         assert row[1] == "run-123"  # run_id
-        assert row[2] == "oil_price"  # model_id
-        assert row[3] == 0.72  # probability
+        assert row[3] == "oil_price"  # model_id
+        assert row[4] == 0.72  # probability
 
     def test_run_id_correlates_predictions(self, conn):
         from parallax.scoring.prediction_log import PredictionLogger
@@ -162,7 +162,8 @@ class TestPredictionLogTable:
         ).fetchall()
         col_names = [c[0] for c in cols]
         assert col_names == [
-            "log_id", "run_id", "model_id", "probability", "direction",
+            "log_id", "run_id", "data_environment", "model_id", "probability", "direction",
             "confidence", "reasoning", "evidence", "timeframe",
             "news_context", "cascade_inputs", "created_at",
+            "experiment_id", "variant",
         ]

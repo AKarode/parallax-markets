@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+from uuid import uuid4
+
+import duckdb
+
+
 # Approximate token costs (USD per 1K tokens)
 # Updated per validation: Haiku ~$0.005/call, Sonnet ~$0.031/call
 _PRICING = {
@@ -14,8 +21,15 @@ class BudgetTracker:
     Auto-degrades to rule-based when budget is exceeded.
     """
 
-    def __init__(self, daily_cap_usd: float) -> None:
+    def __init__(
+        self,
+        daily_cap_usd: float,
+        db_conn: duckdb.DuckDBPyConnection | None = None,
+        run_id: str | None = None,
+    ) -> None:
         self._daily_cap = daily_cap_usd
+        self._db_conn = db_conn
+        self._run_id = run_id
         self._spend_today: float = 0.0
         self._last_activation: dict[str, int] = {}  # agent_id -> tick
         self._call_count: int = 0
@@ -25,6 +39,21 @@ class BudgetTracker:
         cost = (input_tokens / 1000) * pricing["input"] + (output_tokens / 1000) * pricing["output"]
         self._spend_today += cost
         self._call_count += 1
+        if self._db_conn is not None:
+            self._db_conn.execute(
+                """
+                INSERT INTO llm_usage (
+                    usage_id,
+                    run_id,
+                    model_id,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [str(uuid4()), self._run_id, model, input_tokens, output_tokens, cost],
+            )
 
     def total_spend_today(self) -> float:
         return self._spend_today
