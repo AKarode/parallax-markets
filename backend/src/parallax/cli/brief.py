@@ -593,6 +593,16 @@ def _run_report_card() -> None:
     conn.close()
 
 
+def _run_scorecard(date_str: str | None = None) -> None:
+    from parallax.scoring.scorecard import compute_daily_scorecard
+
+    runtime = resolve_runtime_config(dry_run=False)
+    conn = duckdb.connect(runtime.db_path)
+    create_tables(conn)
+    print(compute_daily_scorecard(conn, date_str))
+    conn.close()
+
+
 def _init_anthropic():
     import anthropic
 
@@ -719,6 +729,8 @@ def main():
     parser.add_argument("--calibration", action="store_true", help="Print signal-quality report")
     parser.add_argument("--scheduled", action="store_true", help="Write structured JSON output")
     parser.add_argument("--report-card", action="store_true", help="Print trading report card")
+    parser.add_argument("--scorecard", action="store_true", help="Compute daily scorecard metrics")
+    parser.add_argument("--date", type=str, default=None, help="Date for scorecard (YYYY-MM-DD, default today)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
@@ -731,6 +743,9 @@ def main():
         return
     if args.report_card:
         _run_report_card()
+        return
+    if args.scorecard:
+        _run_scorecard(args.date)
         return
 
     asyncio.run(run_brief(dry_run=args.dry_run, no_trade=args.no_trade, scheduled=args.scheduled))
