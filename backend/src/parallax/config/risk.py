@@ -27,13 +27,22 @@ class RiskLimits(BaseModel):
     daily_loss_limit: float = 50.0
     default_order_size: int = 10
     min_order_size: int = 1
+    bankroll: float = 250.0
+    kelly_multiplier: float = 0.25
     theme_limits: dict[str, float] = Field(default_factory=dict)
 
-    @field_validator("max_notional", "daily_loss_limit")
+    @field_validator("max_notional", "daily_loss_limit", "bankroll")
     @classmethod
     def validate_non_negative_float(cls, value: float) -> float:
         if value < 0.0:
             raise ValueError(f"Risk limits must be non-negative, got {value}")
+        return value
+
+    @field_validator("kelly_multiplier")
+    @classmethod
+    def validate_kelly_multiplier(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"kelly_multiplier must be between 0 and 1, got {value}")
         return value
 
     @field_validator("max_open_orders", "max_open_positions", "default_order_size", "min_order_size")

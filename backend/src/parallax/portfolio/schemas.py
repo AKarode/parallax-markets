@@ -44,6 +44,7 @@ class ProposedTrade(BaseModel):
     theme: str = "general"
     venue: str | None = None
     signal_id: str | None = None
+    edge: float | None = None
     created_at: datetime | None = None
 
     @field_validator("side")
