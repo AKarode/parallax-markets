@@ -469,8 +469,8 @@ async def run_brief(
             run_id,
             predictions,
             refreshed_signals,
-            runtime,
-            trade_journal,
+            trade_journal=trade_journal,
+            runtime=runtime,
             divergence_count=len(refreshed_signals),
             log_dir=log_dir,
         )
