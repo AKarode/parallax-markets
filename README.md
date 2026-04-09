@@ -22,8 +22,14 @@ News Sources                    Market Data
                    Trade Signals
               BUY_YES / BUY_NO / HOLD
                         |
-                   Paper Trading
-                 (Kalshi sandbox)
+              +---------+---------+
+              |                   |
+         Paper Trading      Signal Ledger
+       (Kalshi sandbox)    (DuckDB + calibration)
+                                  |
+                          Feedback Loop
+                    (recalibration, track records,
+                     discount auto-adjustment)
 ```
 
 ## Prediction Models
@@ -35,6 +41,20 @@ News Sources                    Market Data
 | **Hormuz Reopening** | Probability of strait reopening in 14 days | Cascade scenario modeling + LLM reasoning |
 
 Each model makes a single Claude Sonnet call (~$0.007/call). Total cost: ~$0.02 per brief run, well under the $20/day budget.
+
+## Dashboard
+
+Dark-themed Streamlit dashboard showing real-time predictions, signal history with contract descriptions, edge analysis charts, and prediction timeline.
+
+```bash
+cd backend && DUCKDB_PATH=data/parallax.duckdb streamlit run src/parallax/dashboard/app.py
+```
+
+Requires a pipeline run first to populate the database:
+
+```bash
+cd backend && DUCKDB_PATH=data/parallax.duckdb python -m parallax.cli.brief --no-trade
+```
 
 ## Quick Start
 
@@ -51,13 +71,17 @@ Each model makes a single Claude Sonnet call (~$0.007/call). Total cost: ~$0.02 
 cd backend
 pip install -e ".[dev]"
 
-# Set environment variables
-export ANTHROPIC_API_KEY="your-key"
-export KALSHI_API_KEY="your-kalshi-key-id"
-export KALSHI_PRIVATE_KEY_PATH="$HOME/.kalshi/private_key.pem"
+# Create .env file
+cat > .env << 'EOF'
+ANTHROPIC_API_KEY=your-key
+KALSHI_API_KEY=your-kalshi-key-id
+KALSHI_PRIVATE_KEY_PATH=~/.kalshi/private_key.pem
+EIA_API_KEY=your-eia-key
+DUCKDB_PATH=data/parallax.duckdb
+EOF
 
-# Optional
-export EIA_API_KEY="your-eia-key"  # For oil price data
+# Load env and run
+set -a && source .env && set +a
 ```
 
 ### Kalshi API Keys
@@ -82,6 +106,9 @@ python -m parallax.cli.brief
 
 # With debug logging
 python -m parallax.cli.brief --no-trade -v
+
+# Scheduled mode (JSON output for cron)
+python -m parallax.cli.brief --scheduled
 ```
 
 ### Example Output
@@ -89,33 +116,35 @@ python -m parallax.cli.brief --no-trade -v
 ```
 ====================================================
 PARALLAX DAILY INTELLIGENCE BRIEF
-2026-04-08 06:53 UTC | Budget: $0.02/$20.00
+2026-04-09 05:56 UTC | Budget: $0.02/$20.00
 ====================================================
 
 --- PREDICTIONS ---
 
-OIL PRICE
-  Direction: decrease | Magnitude: $-8-$-3
-  Confidence: 85% | Timeframe: 7d
-  Reasoning: US-Iran ceasefire reduces geopolitical risk premium...
-
 CEASEFIRE
-  Probability: 35%
-  Confidence: 35% | Timeframe: 14d
-  Reasoning: Ceasefire faces structural weaknesses despite initial optimism...
+  Probability: 25%
+  Confidence: 70% | Timeframe: 14d
+  Reasoning: The ceasefire appears to be unraveling rapidly...
 
 HORMUZ REOPENING
-  Probability: 65%
+  Probability: 75%
   Confidence: 65% | Timeframe: 14d
-  Reasoning: Ceasefire creates momentum but two-week timeframe is tight...
+  Reasoning: The current complete closure represents an unprecedented...
+
+OIL PRICE
+  Direction: decrease | Magnitude: $-5-$-2
+  Confidence: 70% | Timeframe: 7d
+  Reasoning: Significant disconnect between spot prices ($138.21)...
 
 --- DIVERGENCES ---
 
-  SIGNAL: BUY_NO KXWTIMAX-26DEC31-T120
-  Model: 15% vs Market: 58% | Edge: -43.1% (strong)
+  SIGNAL: BUY_NO KXUSAIRANAGREEMENT-27
+  Model: 25% vs Market: 50% | Edge: -15.0% (moderate)
 
-  SIGNAL: BUY_YES KXUSAIRANAGREEMENT-27-26MAY
-  Model: 35% vs Market: 9% | Edge: +26.0% (strong)
+--- SIGNAL AUDIT ---
+
+  KXUSAIRANAGREEMENT-27   ceasefire       near_proxy   -15.0%  BUY_NO [HALF]
+  KXUSAIRANAGREEMENT-27   hormuz_reopen   loose_proxy   +7.5%  BUY_YES [HALF]
 ```
 
 ## API Server
@@ -139,45 +168,64 @@ uvicorn parallax.main:app --reload
 backend/src/parallax/
   cli/brief.py              # Main entry point - daily intelligence brief
   main.py                   # FastAPI REST API
+  contracts/
+    schemas.py              # ContractRecord, MappingResult, ProxyClass
+    registry.py             # DuckDB-backed contract registry CRUD
+    mapping_policy.py       # Proxy-aware alignment, edge discounting, auto-tuning
+  dashboard/
+    app.py                  # Streamlit dashboard (dark terminal theme)
+    data.py                 # Reusable data layer (pure DuckDB queries)
   ingestion/
-    google_news.py           # Google News RSS poller (free, no auth)
-    gdelt_doc.py             # GDELT DOC 2.0 API (free, no auth)
-    gdelt.py                 # GDELT BigQuery pipeline (4-stage filter)
-    oil_prices.py            # EIA API v2 (Brent/WTI)
-    entities.py              # Critical entity list (IRGC, CENTCOM, etc.)
-    dedup.py                 # Semantic dedup (sentence-transformers)
+    google_news.py          # Google News RSS poller
+    gdelt_doc.py            # GDELT DOC 2.0 API
+    oil_prices.py           # EIA API v2 (Brent/WTI)
+    entities.py             # Critical entity list (IRGC, CENTCOM, etc.)
   markets/
-    kalshi.py                # Kalshi API client (RSA-PSS auth)
-    polymarket.py            # Polymarket read-only client
-    schemas.py               # MarketPrice, Orderbook, Position models
+    kalshi.py               # Kalshi API client (RSA-PSS auth)
+    polymarket.py           # Polymarket read-only client
+    schemas.py              # MarketPrice, Orderbook, Position
   prediction/
-    oil_price.py             # Oil price direction predictor
-    ceasefire.py             # Ceasefire probability predictor
-    hormuz.py                # Hormuz reopening predictor
-    schemas.py               # PredictionOutput model
+    oil_price.py            # Oil price direction predictor
+    ceasefire.py            # Ceasefire probability predictor
+    hormuz.py               # Hormuz reopening predictor
+    schemas.py              # PredictionOutput model
   divergence/
-    detector.py              # Model vs market comparison
+    detector.py             # Model vs market comparison
   scoring/
-    tracker.py               # Paper trade tracking + P&L
+    tracker.py              # Paper trade tracking + P&L
+    ledger.py               # Signal ledger with contract provenance
+    prediction_log.py       # Persisted model outputs with run context
+    resolution.py           # Kalshi settlement polling + P&L backfill
+    calibration.py          # Hit rate, calibration curve, edge decay
+    recalibration.py        # Bucket-based probability adjustment
+    report_card.py          # P&L by proxy class, significance tests
+    track_record.py         # Per-model hit rate for prompt injection
   simulation/
-    cascade.py               # 6-rule cascade engine
-    engine.py                # Discrete event simulation
-    world_state.py           # In-memory world state
-    config.py                # YAML scenario config
-    circuit_breaker.py       # Escalation limiter
+    cascade.py              # 6-rule cascade engine
+    world_state.py          # In-memory world state
+    config.py               # YAML scenario config
   budget/
-    tracker.py               # $20/day LLM budget enforcement
+    tracker.py              # $20/day LLM budget enforcement
   db/
-    schema.py                # DuckDB schema (12 tables)
-    writer.py                # Async single-writer queue
-    queries.py               # Read-only query functions
+    schema.py               # DuckDB schema (12 tables)
+    writer.py               # Async single-writer queue
 ```
+
+## Calibration Loop
+
+The system self-improves through three feedback mechanisms:
+
+1. **Discount auto-adjustment** -- proxy class discount factors (DIRECT=1.0, NEAR_PROXY=0.6, LOOSE_PROXY=0.3) shift toward historical hit rates using bounded EMA. DIRECT never drops below 0.8, LOOSE_PROXY never rises above 0.5.
+
+2. **Threshold tuning** -- per-class min_edge thresholds auto-raise when small edges historically lose (win_rate < 0.4 on edges < 8%).
+
+3. **Track record injection** -- each prediction model's prompt includes its own hit rate history, enabling self-correction based on past performance.
 
 ## Testing
 
 ```bash
 cd backend
-python -m pytest tests/ -x -v    # 147 tests
+python -m pytest tests/ -x -v    # 241 tests
 ```
 
 ## Key Design Decisions
@@ -187,6 +235,7 @@ python -m pytest tests/ -x -v    # 147 tests
 - **Paper trading first**: Prove edge on Kalshi sandbox before risking capital
 - **P&L as eval**: Prediction market resolution replaces manual ground truth scoring
 - **Google News RSS over BigQuery**: Free, no auth, 5-15 min latency vs BigQuery's cost and credential requirements
+- **Self-calibrating pipeline**: All three tuning levers (discounts, thresholds, track records) activate automatically as data accumulates
 
 ## Context
 
