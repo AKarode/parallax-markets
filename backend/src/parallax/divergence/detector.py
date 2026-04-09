@@ -41,9 +41,15 @@ class Divergence(BaseModel):
 class DivergenceDetector:
     """Compare model predictions against executable quotes and flag trades."""
 
-    def __init__(self, min_edge_pct: float = 5.0, cost_model: CostModel | None = None) -> None:
+    def __init__(
+        self,
+        min_edge_pct: float = 5.0,
+        cost_model: CostModel | None = None,
+        max_quote_age_seconds: float = 0.0,
+    ) -> None:
         self._min_edge = min_edge_pct / 100.0
         self._cost_model = cost_model
+        self._max_quote_age = max_quote_age_seconds
 
     def detect(
         self,
@@ -59,6 +65,38 @@ class DivergenceDetector:
                 continue
 
             model_yes_probability = prediction.probability
+
+            # Staleness guard
+            if self._max_quote_age > 0:
+                quote_time = matched_market.quote_timestamp or matched_market.fetched_at
+                now = datetime.now(timezone.utc)
+                staleness = (now - quote_time).total_seconds()
+                if staleness > self._max_quote_age:
+                    divergences.append(
+                        Divergence(
+                            model_id=prediction.model_id,
+                            prediction=prediction,
+                            market_price=matched_market,
+                            model_probability=model_yes_probability,
+                            market_probability=matched_market.reference_price(),
+                            buy_yes_edge=None,
+                            buy_no_edge=None,
+                            edge=0.0,
+                            gross_edge=0.0,
+                            net_edge=0.0,
+                            edge_pct=0.0,
+                            signal="STALE_QUOTE",
+                            strength="negligible",
+                            entry_side=None,
+                            entry_price=None,
+                            entry_price_kind=None,
+                            entry_price_is_executable=False,
+                            tradeability_status="non_tradable",
+                            created_at=datetime.now(timezone.utc),
+                        ),
+                    )
+                    continue
+
             model_no_probability = 1.0 - model_yes_probability
             buy_yes_edge = None
             buy_no_edge = None
