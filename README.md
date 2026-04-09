@@ -164,9 +164,18 @@ backend/src/parallax/
     ledger.py               signal ledger with entry semantics
     prediction_log.py       persisted predictions with environment labels
     report_card.py          traded-only report card
+    recalibration.py        bucket-based probability recalibration
     resolution.py           settlement backfill for signals and positions
+    scorecard.py            daily scorecard ETL (15+ metrics, 5 categories)
     tracker.py              order/fill/position journal
     track_record.py         prompt track record
+  ops/
+    alerts.py               alert dispatcher + DuckDB persistence sink
+    runtime.py              runtime config and kill switch
+  budget/
+    tracker.py              $20/day LLM budget + per-call cost persistence
+  scripts/
+    cron_pipeline.sh        automated pipeline runner (cron/launchd)
 ```
 
 ## Testing
@@ -186,6 +195,64 @@ The executable-pricing and journal refactor is covered by focused tests for:
 - resolution backfill
 - trade/report evaluation split
 - brief formatting and dry-run isolation
+
+## Daily Scorecard
+
+Compute 15+ metrics across Signal Quality, Execution, Portfolio/Risk, Data Quality, and Ops:
+
+```bash
+# Today's scorecard
+python -m parallax.cli.brief --scorecard
+
+# Specific date
+python -m parallax.cli.brief --scorecard --date 2026-04-09
+```
+
+Metrics are persisted to the `daily_scorecard` DuckDB table and can be trended over time.
+
+## Automated Pipeline (Cron)
+
+Run the full pipeline on a schedule: predictions → resolution check → scorecard.
+
+### Deploy on WSL / Linux
+
+```bash
+# Clone and install
+git clone git@github.com:AKarode/parallax-markets.git
+cd parallax-markets/backend
+pip install -e ".[dev]"
+
+# Set up environment
+cp .env.example .env
+# Edit .env with your API keys:
+#   ANTHROPIC_API_KEY, KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH
+
+# Test the pipeline
+source .env && python -m parallax.cli.brief --no-trade
+
+# Install cron (8am + 8pm UTC)
+(crontab -l 2>/dev/null; echo "0 8,20 * * * $(pwd)/scripts/cron_pipeline.sh") | crontab -
+
+# Verify
+crontab -l
+```
+
+The cron script auto-detects paths from its own location — no editing needed. Logs go to `~/parallax-logs/`.
+
+### Deploy on macOS
+
+Same setup, just use `launchd` or `crontab -e` to add:
+
+```
+0 8,20 * * * /path/to/parallax-markets/backend/scripts/cron_pipeline.sh
+```
+
+### What the cron does
+
+Each run:
+1. `parallax brief --no-trade --scheduled` — predictions + market reads + signal evaluation
+2. `parallax brief --check-resolutions` — backfill settled contracts
+3. `parallax brief --scorecard` — compute daily metrics
 
 ## Current Limitations
 
