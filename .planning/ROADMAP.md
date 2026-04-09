@@ -10,8 +10,8 @@ The roadmap strengthens the pipeline's trustworthiness and expands its scope. Bu
 
 - [x] **Phase 1: Contract Registry + Mapping Policy + Evaluation Ledger** - Formal proposition alignment between model predictions and tradeable contracts
 - [x] **Phase 2: Prediction Persistence + Calibration** - Persist every prediction with full context, enable calibration analysis
-- [ ] **Phase 3: Paper Trading Evaluation** - Contract-level P&L tracking to prove or disprove edge
-- [ ] **Phase 4: Deployment Fixes** - Docker reliability, API hydration, error handling, structured logging
+- [x] **Phase 3: Paper Trading Evaluation** - Contract-level P&L tracking, Portfolio Allocator, and Risk controls
+- [x] **Phase 4: Deployment Fixes** - Ops routing, Docker reliability, robust execution environment rules
 - [ ] **Phase 5: Second Thesis Expansion** - Expand beyond Iran/Hormuz to additional prediction market opportunities
 
 ## Phase Details
@@ -100,6 +100,6 @@ Phase 1 ──> Phase 2 ──> Phase 3 ──> Phase 5
 |-------|----------------|--------|-----------|
 | 1. Contract Registry + Mapping Policy | 3/3 | Completed | 2026-04-08 |
 | 2. Prediction Persistence + Calibration | 3/3 | Completed | 2026-04-08 |
-| 3. Paper Trading Evaluation | 0/4 | Not started | - |
-| 4. Deployment Fixes | 0/TBD | Not started | - |
+| 3. Paper Trading Evaluation | 4/4 | Completed | 2026-04-09 |
+| 4. Deployment Fixes | TBD | In Progress | 2026-04-09 |
 | 5. Second Thesis Expansion | 0/TBD | Not started | - |
