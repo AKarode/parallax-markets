@@ -16,50 +16,119 @@ import duckdb
 from fastapi import FastAPI
 
 from parallax.db.schema import create_tables
-from parallax.db.runtime import resolve_runtime_config
+from parallax.ops import build_alert_dispatcher, build_kalshi_client_config, resolve_api_runtime
 
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize DuckDB and create tables on startup."""
-    runtime = resolve_runtime_config(dry_run=False)
-    db_path = runtime.db_path
-    if db_path != ":memory:":
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    alerts = build_alert_dispatcher()
+    app.state.alerts = alerts
+    conn = None
+    try:
+        runtime = resolve_api_runtime(dry_run=False)
+        db_path = runtime.db_path
+        if db_path != ":memory:":
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    conn = duckdb.connect(db_path)
-    create_tables(conn)
-    app.state.db = conn
-    app.state.runtime = runtime
+        conn = duckdb.connect(db_path)
+        create_tables(conn)
+        app.state.db = conn
+        app.state.runtime = runtime
 
-    # Initialize market clients (optional — may not have credentials)
-    app.state.kalshi = None
-    app.state.polymarket = None
-    app.state.last_predictions = []
-    app.state.last_markets = []
-    app.state.last_divergences = []
-    app.state.last_brief_time = None
+        # Initialize market clients after the runtime guard resolves the process policy.
+        app.state.kalshi = None
+        app.state.polymarket = None
+        app.state.last_predictions = []
+        app.state.last_markets = []
+        app.state.last_divergences = []
+        app.state.last_brief_time = None
 
-    kalshi_key = os.environ.get("KALSHI_API_KEY", "")
-    kalshi_pk = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
-    if kalshi_key and kalshi_pk:
-        from parallax.markets.kalshi import KalshiClient
-        app.state.kalshi = KalshiClient(api_key=kalshi_key, private_key_path=kalshi_pk)
+        if runtime.live_execution_requested and not runtime.live_execution_authorized:
+            await alerts.emit(
+                event_type="live_execution_blocked",
+                severity="critical",
+                message="Blocked live execution request during API startup.",
+                details={
+                    "data_environment": runtime.data_environment,
+                    "requested_execution_environment": runtime.requested_execution_environment,
+                    "resolved_execution_environment": runtime.execution_environment,
+                    "reason": runtime.authorization_reason,
+                    "runtime_status_path": runtime.runtime_status.path,
+                },
+            )
+        elif runtime.kill_switch_enabled:
+            await alerts.emit(
+                event_type="kill_switch_engaged",
+                severity="warning",
+                message="Kill switch is engaged; execution remains constrained.",
+                details={
+                    "data_environment": runtime.data_environment,
+                    "execution_environment": runtime.execution_environment,
+                    "reason": runtime.runtime_status.reason,
+                    "runtime_status_path": runtime.runtime_status.path,
+                },
+            )
 
-    from parallax.markets.polymarket import PolymarketClient
-    app.state.polymarket = PolymarketClient()
+        kalshi_key = os.environ.get("KALSHI_API_KEY", "")
+        kalshi_pk = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
+        kalshi_config = build_kalshi_client_config(
+            runtime,
+            api_key=kalshi_key,
+            private_key_path=kalshi_pk,
+        )
+        if kalshi_config:
+            from parallax.markets.kalshi import KalshiClient
+            app.state.kalshi = KalshiClient(**kalshi_config)
+        elif kalshi_key and kalshi_pk:
+            await alerts.emit(
+                event_type="kalshi_client_disabled",
+                severity="warning",
+                message="Kalshi credentials were present but runtime policy disabled client initialization.",
+                details={
+                    "data_environment": runtime.data_environment,
+                    "requested_execution_environment": runtime.requested_execution_environment,
+                    "resolved_execution_environment": runtime.execution_environment,
+                    "reason": runtime.authorization_reason,
+                },
+            )
 
-    logger.info(
-        "Parallax API started (data_environment=%s execution_environment=%s db=%s)",
-        runtime.data_environment,
-        runtime.execution_environment,
-        db_path,
-    )
-    yield
+        from parallax.markets.polymarket import PolymarketClient
+        app.state.polymarket = PolymarketClient()
 
-    conn.close()
-    logger.info("Parallax API stopped")
+        logger.info(
+            "Parallax API started (data_environment=%s requested_execution=%s execution_environment=%s db=%s)",
+            runtime.data_environment,
+            runtime.requested_execution_environment,
+            runtime.execution_environment,
+            db_path,
+        )
+        await alerts.emit(
+            event_type="api_started",
+            severity="info",
+            message="Parallax API runtime initialized.",
+            details={
+                "data_environment": runtime.data_environment,
+                "requested_execution_environment": runtime.requested_execution_environment,
+                "execution_environment": runtime.execution_environment,
+                "kalshi_base_url": runtime.kalshi_base_url,
+                "live_execution_authorized": runtime.live_execution_authorized,
+            },
+        )
+        yield
+    except Exception as exc:
+        await alerts.emit(
+            event_type="api_startup_failed",
+            severity="critical",
+            message="Parallax API startup failed.",
+            details={"error": str(exc)},
+        )
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
+        logger.info("Parallax API stopped")
 
 
 app = FastAPI(title="Parallax", version="1.0.0", lifespan=lifespan)
@@ -76,7 +145,18 @@ async def health():
         "divergences_count": len(app.state.last_divergences),
         "kalshi_configured": app.state.kalshi is not None,
         "data_environment": app.state.runtime.data_environment,
+        "requested_execution_environment": app.state.runtime.requested_execution_environment,
         "execution_environment": app.state.runtime.execution_environment,
+        "live_execution_authorized": app.state.runtime.live_execution_authorized,
+        "kill_switch_enabled": app.state.runtime.kill_switch_enabled,
+        "runtime_status": {
+            "path": app.state.runtime.runtime_status.path,
+            "exists": app.state.runtime.runtime_status.exists,
+            "status": app.state.runtime.runtime_status.status,
+            "allow_live_execution": app.state.runtime.runtime_status.allow_live_execution,
+            "reason": app.state.runtime.runtime_status.reason,
+            "updated_at": app.state.runtime.runtime_status.updated_at,
+        },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -145,6 +225,7 @@ async def get_trades():
             "orders": [dict(zip(order_columns, row)) for row in orders],
             "positions": [dict(zip(position_columns, row)) for row in positions],
             "data_environment": app.state.runtime.data_environment,
+            "execution_environment": app.state.runtime.execution_environment,
         }
     except Exception:
         return {"orders": [], "positions": []}
