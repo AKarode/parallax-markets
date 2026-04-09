@@ -215,6 +215,12 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             resolution_criteria TEXT NOT NULL,
             resolution_date TIMESTAMP,
             is_active BOOLEAN DEFAULT true,
+            contract_family VARCHAR,
+            expected_fee_rate DOUBLE,
+            expected_slippage_rate DOUBLE,
+            staleness_threshold_seconds DOUBLE,
+            allow_fetched_at_fallback BOOLEAN,
+            oil_move_scale_usd DOUBLE,
             last_checked TIMESTAMP,
             metadata JSON
         )
@@ -268,6 +274,18 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             contract_title VARCHAR,
             proxy_class VARCHAR NOT NULL,
             confidence_discount DOUBLE NOT NULL,
+            contract_family VARCHAR,
+            pricing_estimator VARCHAR,
+            fair_value_yes DOUBLE,
+            fair_value_no DOUBLE,
+            gross_edge DOUBLE,
+            expected_fee_rate DOUBLE,
+            expected_slippage_rate DOUBLE,
+            expected_total_cost DOUBLE,
+            net_edge DOUBLE,
+            quote_age_seconds DOUBLE,
+            staleness_threshold_seconds DOUBLE,
+            quote_is_stale BOOLEAN DEFAULT false,
             market_best_yes_bid DOUBLE,
             market_best_yes_ask DOUBLE,
             market_best_no_bid DOUBLE,
@@ -443,6 +461,26 @@ def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
         _add_column_if_missing(conn, "signal_ledger", "execution_status", "VARCHAR DEFAULT 'not_attempted'")
         _add_column_if_missing(conn, "signal_ledger", "realized_pnl", "DOUBLE")
         _add_column_if_missing(conn, "signal_ledger", "counterfactual_pnl", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "contract_family", "VARCHAR")
+        _add_column_if_missing(conn, "signal_ledger", "pricing_estimator", "VARCHAR")
+        _add_column_if_missing(conn, "signal_ledger", "fair_value_yes", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "fair_value_no", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "gross_edge", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "expected_fee_rate", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "expected_slippage_rate", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "expected_total_cost", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "net_edge", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "quote_age_seconds", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "staleness_threshold_seconds", "DOUBLE")
+        _add_column_if_missing(conn, "signal_ledger", "quote_is_stale", "BOOLEAN DEFAULT false")
+
+        if _table_exists(conn, "contract_registry"):
+            _add_column_if_missing(conn, "contract_registry", "contract_family", "VARCHAR")
+            _add_column_if_missing(conn, "contract_registry", "expected_fee_rate", "DOUBLE")
+            _add_column_if_missing(conn, "contract_registry", "expected_slippage_rate", "DOUBLE")
+            _add_column_if_missing(conn, "contract_registry", "staleness_threshold_seconds", "DOUBLE")
+            _add_column_if_missing(conn, "contract_registry", "allow_fetched_at_fallback", "BOOLEAN")
+            _add_column_if_missing(conn, "contract_registry", "oil_move_scale_usd", "DOUBLE")
 
         if _column_exists(conn, "signal_ledger", "market_yes_price"):
             conn.execute("""
