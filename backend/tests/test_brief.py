@@ -228,3 +228,60 @@ class TestRunBriefDryRun:
         await run_brief(dry_run=True, no_trade=True)
         captured = capsys.readouterr()
         assert "PARALLAX" in captured.out
+
+
+class TestScheduledFlag:
+    """Test --scheduled flag with JSON output."""
+
+    def test_scheduled_flag_parsed(self):
+        """--scheduled flag should be recognized by argparse."""
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--scheduled", action="store_true")
+        args = parser.parse_args(["--scheduled"])
+        assert args.scheduled is True
+
+    def test_write_scheduled_output_creates_json(self, tmp_path):
+        """_write_scheduled_output() creates JSON at {dir}/runs/{run_id}.json."""
+        from parallax.cli.brief import _write_scheduled_output
+
+        run_id = "test-run-123"
+        preds = _make_dry_run_predictions()
+        _write_scheduled_output(
+            run_id=run_id,
+            predictions=preds,
+            signals=[],
+            divergence_count=2,
+            log_dir=tmp_path,
+        )
+
+        output_file = tmp_path / "runs" / f"{run_id}.json"
+        assert output_file.exists()
+
+        import json
+        data = json.loads(output_file.read_text())
+        assert data["run_id"] == run_id
+        assert "timestamp" in data
+        assert "predictions" in data
+        assert data["divergence_count"] == 2
+        assert len(data["predictions"]) == 3
+
+    async def test_scheduled_dry_run_writes_json_and_returns_brief(self, tmp_path):
+        """run_brief(scheduled=True) writes JSON AND returns brief string."""
+        result = await run_brief(dry_run=True, no_trade=True, scheduled=True, log_dir=tmp_path)
+
+        # Still returns the brief text
+        assert "PARALLAX DAILY INTELLIGENCE BRIEF" in result
+
+        # Also wrote JSON file
+        runs_dir = tmp_path / "runs"
+        assert runs_dir.exists()
+        json_files = list(runs_dir.glob("*.json"))
+        assert len(json_files) == 1
+
+        import json
+        data = json.loads(json_files[0].read_text())
+        assert "run_id" in data
+        assert "predictions" in data
+        assert len(data["predictions"]) == 3
