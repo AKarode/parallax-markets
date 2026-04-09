@@ -40,6 +40,7 @@ from parallax.prediction.oil_price import OilPricePredictor
 from parallax.prediction.schemas import PredictionOutput
 from parallax.scoring.ledger import SignalLedger
 from parallax.scoring.prediction_log import PredictionLogger
+from parallax.scoring.recalibration import recalibrate_probability
 from parallax.scoring.tracker import PaperTradeTracker
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.config import ScenarioConfig, load_scenario_config
@@ -177,7 +178,8 @@ def _format_brief(
         for sig in signals:
             status = sig.signal
             proxy = sig.proxy_class
-            lines.append(f"  {sig.contract_ticker:<30} {sig.model_id:<18} {proxy:<12} {sig.effective_edge:>+6.1%}  {status}")
+            size_tag = f" [{sig.suggested_size.upper()}]" if getattr(sig, "suggested_size", None) else ""
+            lines.append(f"  {sig.contract_ticker:<30} {sig.model_id:<18} {proxy:<12} {sig.effective_edge:>+6.1%}  {status}{size_tag}")
         lines.append("")
     else:
         lines.append("  No signals evaluated.")
@@ -319,6 +321,18 @@ async def run_brief(
         cascade_ctx = None
         pred_logger.log_prediction(run_id, pred, news_ctx, cascade_ctx)
 
+    # Recalibrate predictions using bucket-based historical correction
+    raw_probs: dict[str, float] = {}
+    for pred in predictions:
+        calibrated, raw = recalibrate_probability(pred.probability, pred.model_id, conn)
+        raw_probs[pred.model_id] = raw
+        if calibrated != raw:
+            logger.info("Recalibrated %s: %.2f -> %.2f", pred.model_id, raw, calibrated)
+            pred.probability = calibrated
+
+    # Auto-tune edge thresholds from historical performance
+    policy.update_thresholds_from_history(conn)
+
     # Contract-aware mapping with signal ledger
     all_signals = []
     for pred in predictions:
@@ -335,7 +349,12 @@ async def run_brief(
                 if c.ticker == mapping.contract_ticker:
                     contract_title = c.title
                     break
-            signal = ledger.record_signal(pred, mapping, mp, contract_title=contract_title, run_id=run_id)
+            signal = ledger.record_signal(
+                pred, mapping, mp,
+                contract_title=contract_title,
+                run_id=run_id,
+                raw_probability=raw_probs.get(pred.model_id),
+            )
             all_signals.append(signal)
 
     # Convert actionable signals to Divergence objects for existing paper trade + display code

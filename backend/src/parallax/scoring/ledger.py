@@ -100,6 +100,13 @@ class SignalLedger:
             f"with P={prediction.probability:.2f} over {prediction.timeframe}"
         )
 
+        # Compute suggested_size advisory for actionable signals
+        suggested_size = None
+        if signal in ("BUY_YES", "BUY_NO"):
+            suggested_size = self._compute_suggested_size(
+                prediction.model_id, mapping.proxy_class.value,
+            )
+
         record = SignalRecord(
             signal_id=signal_id,
             run_id=run_id,
@@ -121,6 +128,7 @@ class SignalLedger:
             signal=signal,
             trade_refused_reason=trade_refused_reason,
             raw_probability=raw_probability,
+            suggested_size=suggested_size,
         )
 
         self._conn.execute(
@@ -130,8 +138,8 @@ class SignalLedger:
              model_timeframe, model_reasoning, contract_ticker, contract_title,
              proxy_class, confidence_discount, market_yes_price, market_no_price,
              market_volume, raw_edge, effective_edge, signal,
-             trade_refused_reason, raw_probability)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             trade_refused_reason, raw_probability, suggested_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 record.signal_id,
@@ -154,6 +162,7 @@ class SignalLedger:
                 record.signal,
                 record.trade_refused_reason,
                 record.raw_probability,
+                record.suggested_size,
             ],
         )
 
@@ -163,6 +172,29 @@ class SignalLedger:
             mapping.effective_edge * 100,
         )
         return record
+
+    def _compute_suggested_size(self, model_id: str, proxy_class: str) -> str:
+        """Compute advisory position size based on historical performance.
+
+        Returns 'full' for historically reliable model+proxy combos (5+ resolved,
+        win_rate > 0.5), 'half' for untested or underperforming combos.
+        """
+        row = self._conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN model_was_correct THEN 1 ELSE 0 END) AS wins
+            FROM signal_ledger
+            WHERE model_id = ?
+              AND proxy_class = ?
+              AND model_was_correct IS NOT NULL
+            """,
+            [model_id, proxy_class],
+        ).fetchone()
+
+        if row and int(row[0]) >= 5 and int(row[1]) / int(row[0]) > 0.5:
+            return "full"
+        return "half"
 
     def get_signals(
         self, model_id: str | None = None, limit: int = 100,
