@@ -8,15 +8,16 @@ A prediction market edge-finder for the Iran-Hormuz crisis. Ingests real-world n
 
 Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects (blockade -> flow -> price -> insurance) faster and deeper than headline-scraping bots.
 
-## Current Milestone: v1.1 Contract Alignment + Evaluation
+## Current Milestone: v1.2 Evaluation + Deployment Hardening
 
-**Goal:** The edge-finder is built and runs end-to-end. Next step is making it trustworthy: formal proposition alignment between model predictions and tradeable contracts, persistent evaluation data, and provable P&L.
+**Goal:** The edge-finder is built and Phase 1-2 trust foundations are in place. Next step is proving edge with contract-level P&L, then hardening deployment and API hydration.
 
 **Target features:**
 - Contract registry with proxy classification (DIRECT / NEAR_PROXY / LOOSE_PROXY / NONE) per model type
 - Mapping policy replacing heuristic `_map_predictions_to_markets()` with structured proxy-aware decision logic
 - Prediction persistence with full provenance (model claim, reasoning, news context, cascade state)
 - Signal ledger recording every signal with contract mapping, proxy class, market state, and trade decision
+- Resolution polling and calibration reports for feedback-loop analysis
 - Paper trading evaluation at contract level with P&L segmented by proxy class
 - FastAPI endpoint hydration (return real pipeline data, not empty responses)
 - Second thesis expansion (new prediction domains beyond Iran/Hormuz)
@@ -38,17 +39,20 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - PaperTradeTracker for paper trade P&L tracking
 - BudgetTracker with $20/day cap, per-model pricing, auto-degrade
 - CLI entry point (`parallax.cli.brief`) running full pipeline: news -> predict -> market -> diverge -> trade
-- FastAPI server with 6 endpoints (stub -- not hydrated with real data)
+- FastAPI server with 6 endpoints (latest-run state + persisted paper trades; historical hydration still incomplete)
 - Docker Compose for backend
-- 120 tests passing (165 after Phase 1)
+- Phase 1 completed: contract registry, mapping policy, signal ledger
+- Phase 2 completed: prediction persistence, resolution checker, calibration queries
+- Phase 3 completed: paper trading evaluation, report card, track record injection, recalibration, discount auto-adjustment
+- 241 tests passing
 
 ### Active
 
 - [x] Contract registry in DuckDB with proxy classification per model type — Validated in Phase 1
 - [x] Mapping policy replacing heuristic ticker matching with structured proxy-aware logic — Validated in Phase 1
 - [x] Signal ledger persisting every signal with full provenance — Validated in Phase 1
-- [ ] Prediction persistence with calibration queries (Phase 2)
-- [ ] Paper trading evaluation with contract-level P&L by proxy class (Phase 3)
+- [x] Prediction persistence with calibration queries (Phase 2)
+- [x] Paper trading evaluation with contract-level P&L by proxy class — Validated in Phase 3
 - [ ] Deployment hardening: Docker health checks, API hydration, error handling (Phase 4)
 - [ ] Second thesis expansion beyond Iran/Hormuz (Phase 5)
 
@@ -74,7 +78,7 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - Oil prices: Brent hit $118 Q1 2026, currently $96-113. Largest inflation-adjusted spike since 1988.
 - Kalshi/Polymarket: $200M+ traded on Iran war outcomes. Active markets on ceasefire, Hormuz reopening, oil prices.
 - 30%+ of Polymarket wallets are AI bots. 14/20 most profitable wallets are bots. Edge is in reasoning depth, not speed.
-- Dead code pruning completed April 8 2026: deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/h3_utils.py, ingestion/gdelt.py (BigQuery), ingestion/dedup.py, db/queries.py, frontend/ directory, 3 dead test files. 120 tests still passing.
+- Dead code pruning completed April 8 2026: deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/h3_utils.py, ingestion/gdelt.py (BigQuery), ingestion/dedup.py, db/queries.py, frontend/ directory, 3 dead test files. The current suite is 192 passing tests.
 - Codebase is now lean: 3 prediction models, 2 market clients, 2 news ingestors, 1 cascade engine, 1 divergence detector, CLI + FastAPI entry points.
 
 ## Constraints
@@ -94,7 +98,7 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 | 3 focused models over 50-agent swarm | Structured causal reasoning on oil/ceasefire/Hormuz beats shallow sentiment at 1/100th the cost | Good -- killed swarm April 2026 |
 | CLI-first over frontend dashboard | Ship faster, prove edge via paper trading P&L, defer UI until edge is proven | Good -- deleted frontend April 8 2026 |
 | Google News RSS as primary over GDELT BigQuery | Free, faster (5-15min vs 15-60min), no GCP credentials needed, cleaner signal | Good -- deleted BigQuery pipeline April 8 2026 |
-| Dead code pruning April 8 2026 | Deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/, ingestion/gdelt.py, ingestion/dedup.py, db/queries.py, frontend/ | Good -- 120 tests still pass, codebase is focused |
+| Dead code pruning April 8 2026 | Deleted agents/, simulation/engine.py, circuit_breaker.py, spatial/, ingestion/gdelt.py, ingestion/dedup.py, db/queries.py, frontend/ | Good -- current suite is 192 passing tests and the codebase is focused |
 | Kalshi production for reads, demo for trades | Demo sandbox has no geopolitical markets (only sports/crypto) | Good |
 | Paper trading first | Prove edge before risking capital. Kalshi sandbox is free. | Good |
 | Cascade engine retained | 6-rule parameterized cascade (blockade -> flow -> bypass -> price -> downstream -> insurance) provides second-order reasoning that prediction models use | Good |
@@ -118,4 +122,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-08 after Phase 1 completion (contract registry, mapping policy, signal ledger)*
+*Last updated: 2026-04-09 after Phase 3 completion (paper trading evaluation, report card, track record injection, recalibration, discount auto-adjustment)*
