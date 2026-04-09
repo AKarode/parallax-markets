@@ -1,16 +1,4 @@
-"""Daily intelligence brief -- prediction market edge finder.
-
-Usage: python -m parallax.cli.brief [--dry-run] [--no-trade]
-
-Runs the full pipeline:
-1. Fetch latest GDELT events (last 24h)
-2. Fetch latest EIA oil prices
-3. Fetch Kalshi + Polymarket market prices
-4. Run 3 prediction models
-5. Detect divergences
-6. Output intelligence brief with trade signals
-7. (Optional) Execute paper trades on Kalshi sandbox
-"""
+"""Daily intelligence brief with executable quote semantics and trade journaling."""
 
 from __future__ import annotations
 
@@ -28,10 +16,9 @@ import duckdb
 from parallax.budget.tracker import BudgetTracker
 from parallax.contracts.mapping_policy import MappingPolicy
 from parallax.contracts.registry import ContractRegistry
-from parallax.contracts.schemas import MappingResult
+from parallax.db.runtime import RuntimeConfig, resolve_runtime_config
 from parallax.db.schema import create_tables
-from parallax.divergence.detector import Divergence, DivergenceDetector
-from parallax.markets.kalshi import KalshiClient
+from parallax.markets.kalshi import IRAN_EVENT_TICKERS, KalshiClient
 from parallax.markets.polymarket import PolymarketClient
 from parallax.markets.schemas import MarketPrice
 from parallax.prediction.ceasefire import CeasefirePredictor
@@ -52,7 +39,6 @@ SCENARIO_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "c
 
 
 def _make_dry_run_predictions() -> list[PredictionOutput]:
-    """Generate mock predictions for --dry-run mode."""
     now = datetime.now(timezone.utc)
     return [
         PredictionOutput(
@@ -77,7 +63,7 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
             unit="probability",
             timeframe="14d",
             confidence=0.62,
-            reasoning="Oman-mediated talks showing progress. Both sides signaling willingness but military posture unchanged.",
+            reasoning="Oman-mediated talks are improving dialogue but military posture remains tense.",
             evidence=["Oman mediation active", "US-Iran indirect talks confirmed"],
             created_at=now,
         ),
@@ -90,7 +76,7 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
             unit="pct_reopening",
             timeframe="14d",
             confidence=0.35,
-            reasoning="Partial reopening possible if ceasefire holds. Insurance rates still elevated, suggesting market skepticism.",
+            reasoning="Partial reopening is possible if diplomacy holds, but insurers still price in meaningful disruption.",
             evidence=["Naval de-escalation signals", "Insurance premiums stabilizing"],
             created_at=now,
         ),
@@ -98,14 +84,93 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
 
 
 def _make_dry_run_markets() -> list[MarketPrice]:
-    """Generate mock market prices for --dry-run mode using registry tickers."""
     now = datetime.now(timezone.utc)
     return [
-        MarketPrice(ticker="KXWTIMAX-26DEC31", source="kalshi", yes_price=0.55, no_price=0.45, volume=12000, fetched_at=now),
-        MarketPrice(ticker="KXUSAIRANAGREEMENT-27", source="kalshi", yes_price=0.48, no_price=0.52, volume=8500, fetched_at=now),
-        MarketPrice(ticker="KXCLOSEHORMUZ-27JAN", source="kalshi", yes_price=0.60, no_price=0.40, volume=15000, fetched_at=now),
-        MarketPrice(ticker="KXWTIMIN-26DEC31", source="kalshi", yes_price=0.30, no_price=0.70, volume=5000, fetched_at=now),
+        MarketPrice(
+            ticker="KXWTIMAX-26DEC31",
+            source="kalshi",
+            volume=12000,
+            fetched_at=now,
+            venue_timestamp=now,
+            quote_timestamp=now,
+            best_yes_bid=0.53,
+            best_yes_ask=0.56,
+            best_no_bid=0.44,
+            best_no_ask=0.47,
+            yes_bid_ask_spread=0.03,
+            no_bid_ask_spread=0.03,
+            yes_price=0.545,
+            no_price=0.455,
+            derived_price_kind="midpoint",
+            data_environment="dry_run",
+        ),
+        MarketPrice(
+            ticker="KXUSAIRANAGREEMENT-27",
+            source="kalshi",
+            volume=8500,
+            fetched_at=now,
+            venue_timestamp=now,
+            quote_timestamp=now,
+            best_yes_bid=0.46,
+            best_yes_ask=0.49,
+            best_no_bid=0.51,
+            best_no_ask=0.54,
+            yes_bid_ask_spread=0.03,
+            no_bid_ask_spread=0.03,
+            yes_price=0.475,
+            no_price=0.525,
+            derived_price_kind="midpoint",
+            data_environment="dry_run",
+        ),
+        MarketPrice(
+            ticker="KXCLOSEHORMUZ-27JAN",
+            source="kalshi",
+            volume=15000,
+            fetched_at=now,
+            venue_timestamp=now,
+            quote_timestamp=now,
+            best_yes_bid=0.58,
+            best_yes_ask=0.61,
+            best_no_bid=0.39,
+            best_no_ask=0.42,
+            yes_bid_ask_spread=0.03,
+            no_bid_ask_spread=0.03,
+            yes_price=0.595,
+            no_price=0.405,
+            derived_price_kind="midpoint",
+            data_environment="dry_run",
+        ),
+        MarketPrice(
+            ticker="KXWTIMIN-26DEC31",
+            source="kalshi",
+            volume=5000,
+            fetched_at=now,
+            venue_timestamp=now,
+            quote_timestamp=now,
+            best_yes_bid=0.28,
+            best_yes_ask=0.31,
+            best_no_bid=0.69,
+            best_no_ask=0.72,
+            yes_bid_ask_spread=0.03,
+            no_bid_ask_spread=0.03,
+            yes_price=0.295,
+            no_price=0.705,
+            derived_price_kind="midpoint",
+            data_environment="dry_run",
+        ),
     ]
+
+
+def _format_market_line(market: MarketPrice) -> str:
+    def _fmt(value: float | None) -> str:
+        return "  N/A" if value is None else f"{value:>5.0%}"
+
+    return (
+        f"  {market.ticker:<30} {market.source:<10} "
+        f"{_fmt(market.best_yes_bid)} {_fmt(market.best_yes_ask)} "
+        f"{_fmt(market.best_no_bid)} {_fmt(market.best_no_ask)} "
+        f"{market.derived_price_kind or 'none':<18} {market.data_environment:<8}"
+    )
 
 
 def _format_brief(
@@ -115,56 +180,65 @@ def _format_brief(
     budget: BudgetTracker,
     trade_table: str = "",
     signals: list | None = None,
+    runtime: RuntimeConfig | None = None,
+    trade_journal: list[dict] | None = None,
 ) -> str:
-    """Format the intelligence brief as structured text."""
+    runtime = runtime or resolve_runtime_config(dry_run=True)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     stats = budget.stats()
-
     lines = [
-        "=" * 52,
+        "=" * 72,
         "PARALLAX DAILY INTELLIGENCE BRIEF",
         f"{now} | Budget: ${stats['spend_today_usd']:.2f}/${stats['daily_cap_usd']:.2f}",
-        "=" * 52,
+        f"Data environment: {runtime.data_environment} | Execution environment: {runtime.execution_environment}",
+        "=" * 72,
         "",
         "--- PREDICTIONS ---",
         "",
     ]
 
-    for pred in predictions:
-        title = pred.model_id.upper().replace("_", " ")
+    for prediction in predictions:
+        title = prediction.model_id.upper().replace("_", " ")
         lines.append(title)
-        if pred.model_id == "oil_price":
-            low, high = pred.magnitude_range
-            lines.append(f"  Direction: {pred.direction} | Magnitude: ${low:.0f}-${high:.0f}")
-        else:
-            lines.append(f"  Probability: {pred.probability:.0%}")
-        lines.append(f"  Confidence: {pred.confidence:.0%} | Timeframe: {pred.timeframe}")
-        lines.append(f"  Reasoning: {pred.reasoning}")
+        lines.append(f"  Probability: {prediction.probability:.0%} | Timeframe: {prediction.timeframe}")
+        lines.append(f"  Reasoning: {prediction.reasoning}")
         lines.append("")
 
     lines.append("--- MARKET PRICES ---")
     lines.append("")
-    lines.append(f"  {'Ticker':<30} {'Source':<12} {'Yes':>6} {'No':>6} {'Volume':>10}")
-    lines.append(f"  {'-'*30} {'-'*12} {'-'*6} {'-'*6} {'-'*10}")
-    for mp in market_prices:
-        lines.append(
-            f"  {mp.ticker:<30} {mp.source:<12} {mp.yes_price:>5.0%} {mp.no_price:>5.0%} {mp.volume:>10,.0f}"
-        )
+    lines.append("  Ticker                         Venue      YBid  YAsk  NBid  NAsk  Derived Kind       Env")
+    lines.append("  " + "-" * 88)
+    for market in market_prices:
+        lines.append(_format_market_line(market))
     lines.append("")
 
     lines.append("--- DIVERGENCES ---")
     lines.append("")
-    if not divergences:
-        lines.append("  No significant divergences detected.")
+    lines.append("  Divergence scoring now lives in SIGNAL AUDIT with executable entry prices.")
+    lines.append("")
+
+    lines.append("--- SIGNAL AUDIT ---")
+    lines.append("")
+    if not signals:
+        lines.append("  No signals evaluated.")
     else:
-        for div in divergences:
-            if div.signal != "HOLD":
-                lines.append(f"  SIGNAL: {div.signal} {div.market_price.ticker}")
-                lines.append(
-                    f"  Model: {div.model_probability:.0%} vs Market: {div.market_probability:.0%} "
-                    f"| Edge: {div.edge_pct:+.1f}% ({div.strength})"
-                )
-                lines.append("")
+        for signal in signals:
+            entry = "N/A"
+            if signal.entry_price is not None:
+                entry = f"{signal.entry_side or '?'} @ {signal.entry_price:.0%} ({signal.entry_price_kind})"
+            derived = "N/A"
+            if signal.market_derived_yes_price is not None:
+                derived = f"{signal.market_derived_yes_price:.0%} ({signal.market_derived_price_kind or 'derived'})"
+            lines.append(
+                f"  {signal.contract_ticker:<30} {signal.model_id:<18} {signal.proxy_class:<12} {signal.signal:<8} "
+                f"{(signal.effective_edge or 0.0):>+6.1%} {signal.tradeability_status:<13} exec={entry}"
+            )
+            lines.append(
+                f"    derived_yes={derived} execution_status={signal.execution_status}"
+            )
+            if signal.trade_refused_reason:
+                lines.append(f"    note={signal.trade_refused_reason}")
+    lines.append("")
 
     if trade_table:
         lines.append("--- PAPER TRADES ---")
@@ -172,20 +246,22 @@ def _format_brief(
         lines.append(trade_table)
         lines.append("")
 
-    lines.append("--- SIGNAL AUDIT ---")
+    lines.append("--- TRADE JOURNAL ---")
     lines.append("")
-    if signals:
-        for sig in signals:
-            status = sig.signal
-            proxy = sig.proxy_class
-            size_tag = f" [{sig.suggested_size.upper()}]" if getattr(sig, "suggested_size", None) else ""
-            lines.append(f"  {sig.contract_ticker:<30} {sig.model_id:<18} {proxy:<12} {sig.effective_edge:>+6.1%}  {status}{size_tag}")
-        lines.append("")
+    if not trade_journal:
+        lines.append("  No order attempts recorded.")
     else:
-        lines.append("  No signals evaluated.")
-        lines.append("")
-
-    lines.append("=" * 52)
+        for row in trade_journal:
+            fill = "N/A" if row.get("avg_fill_price") is None else f"{row['avg_fill_price']:.0%}"
+            pnl = ""
+            if row.get("realized_pnl") is not None:
+                pnl = f" pnl=${row['realized_pnl']:+.2f}"
+            lines.append(
+                f"  {row['ticker']:<30} {row['side']:<3} qty={row['quantity']:<3} "
+                f"status={row['order_status']:<10} limit={row.get('intended_price')!s:<6} fill={fill}{pnl}"
+            )
+    lines.append("")
+    lines.append("=" * 72)
     return "\n".join(lines)
 
 
@@ -193,21 +269,13 @@ def _write_scheduled_output(
     run_id: str,
     predictions: list[PredictionOutput],
     signals: list,
-    divergence_count: int,
+    trade_journal: list[dict] | None = None,
+    runtime: RuntimeConfig | None = None,
+    divergence_count: int | None = None,
     log_dir: Path | None = None,
 ) -> Path:
-    """Write structured JSON output for scheduled/cron runs.
-
-    Args:
-        run_id: Unique run identifier.
-        predictions: List of PredictionOutput from this run.
-        signals: List of signal records from this run.
-        divergence_count: Number of divergences detected.
-        log_dir: Override log directory (default: ~/parallax-logs).
-
-    Returns:
-        Path to the written JSON file.
-    """
+    runtime = runtime or resolve_runtime_config(dry_run=True)
+    trade_journal = trade_journal or []
     base_dir = log_dir if log_dir is not None else Path.home() / "parallax-logs"
     runs_dir = base_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -215,25 +283,60 @@ def _write_scheduled_output(
     output = {
         "run_id": run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "predictions": [p.model_dump() for p in predictions],
-        "signals": [
-            {
-                "signal_id": getattr(s, "signal_id", ""),
-                "model_id": getattr(s, "model_id", ""),
-                "contract_ticker": getattr(s, "contract_ticker", ""),
-                "proxy_class": getattr(s, "proxy_class", ""),
-                "effective_edge": getattr(s, "effective_edge", 0.0),
-                "signal": getattr(s, "signal", ""),
-            }
-            for s in signals
-        ],
-        "divergence_count": divergence_count,
+        "data_environment": runtime.data_environment,
+        "execution_environment": runtime.execution_environment,
+        "predictions": [prediction.model_dump() for prediction in predictions],
+        "signals": [signal.model_dump(mode="json") for signal in signals],
+        "trade_journal": trade_journal,
+        "divergence_count": divergence_count if divergence_count is not None else len(signals),
     }
-
     output_path = runs_dir / f"{run_id}.json"
     output_path.write_text(json.dumps(output, indent=2, default=str))
     logger.info("Scheduled output written to %s", output_path)
     return output_path
+
+
+def _persist_market_prices(
+    conn: duckdb.DuckDBPyConnection,
+    market_prices: list[MarketPrice],
+) -> None:
+    for market in market_prices:
+        conn.execute(
+            """
+            INSERT INTO market_prices
+            (ticker, source, data_environment, venue_timestamp, quote_timestamp,
+             best_yes_bid, best_yes_ask, best_no_bid, best_no_ask,
+             yes_bid_ask_spread, no_bid_ask_spread, yes_price, no_price,
+             derived_price_kind, volume, depth_summary, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                market.ticker,
+                market.source,
+                market.data_environment,
+                market.venue_timestamp,
+                market.quote_timestamp,
+                market.best_yes_bid,
+                market.best_yes_ask,
+                market.best_no_bid,
+                market.best_no_ask,
+                market.yes_bid_ask_spread,
+                market.no_bid_ask_spread,
+                market.yes_price,
+                market.no_price,
+                market.derived_price_kind,
+                market.volume,
+                json.dumps(
+                    {
+                        "yes_bid": market.yes_bid_depth.model_dump() if market.yes_bid_depth else None,
+                        "yes_ask": market.yes_ask_depth.model_dump() if market.yes_ask_depth else None,
+                        "no_bid": market.no_bid_depth.model_dump() if market.no_bid_depth else None,
+                        "no_ask": market.no_ask_depth.model_dump() if market.no_ask_depth else None,
+                    }
+                ),
+                market.fetched_at,
+            ],
+        )
 
 
 async def run_brief(
@@ -242,181 +345,156 @@ async def run_brief(
     scheduled: bool = False,
     log_dir: Path | None = None,
 ) -> str:
-    """Run the full intelligence brief pipeline.
-
-    Args:
-        dry_run: Skip LLM calls, use mock predictions.
-        no_trade: Show signals but do not execute paper trades.
-        scheduled: Write structured JSON output for cron/automated runs.
-        log_dir: Override log directory for scheduled output (default: ~/parallax-logs).
-
-    Returns:
-        Formatted brief as string.
-    """
     budget = BudgetTracker(daily_cap_usd=20.0)
     run_id = str(uuid.uuid4())
-
-    # Initialize DB connection early -- needed for track record injection (non-dry-run)
-    # and contract registry/signal ledger (both paths)
-    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-    conn = duckdb.connect(db_path)
+    runtime = resolve_runtime_config(dry_run=dry_run)
+    conn = duckdb.connect(runtime.db_path)
     create_tables(conn)
+    logger.info(
+        "Running brief (data_environment=%s execution_environment=%s db=%s)",
+        runtime.data_environment,
+        runtime.execution_environment,
+        runtime.db_path,
+    )
 
     events: list[dict] = []
-
     if dry_run:
         predictions = _make_dry_run_predictions()
         market_prices = _make_dry_run_markets()
     else:
-        # Initialize clients
         anthropic_client = _init_anthropic()
         config = _load_config()
         cascade = CascadeEngine(config=config)
         world_state = WorldState()
-
-        # Fetch data (parallel)
         events, prices, kalshi_markets, poly_markets = await asyncio.gather(
             _fetch_gdelt_events(),
             _fetch_oil_prices(),
             _fetch_kalshi_markets(),
             _fetch_polymarket_markets(),
         )
-
         market_prices = kalshi_markets + poly_markets
-        mp_dicts = [
-            {"ticker": mp.ticker, "yes_price": mp.yes_price, "source": mp.source}
-            for mp in market_prices
+        market_context = [
+            {
+                "ticker": market.ticker,
+                "derived_yes_price": market.yes_price,
+                "best_yes_ask": market.best_yes_ask,
+                "best_no_ask": market.best_no_ask,
+                "source": market.source,
+            }
+            for market in market_prices
         ]
-
-        # Run predictions (parallel) with db_conn for track record injection
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
+        predictions = list(
+            await asyncio.gather(
+                oil_pred.predict(events, prices, world_state, market_prices=market_context, db_conn=conn),
+                ceasefire_pred.predict(events, market_prices=market_context, db_conn=conn),
+                hormuz_pred.predict(events, world_state, market_prices=market_context, db_conn=conn),
+            ),
+        )
 
-        predictions = list(await asyncio.gather(
-            oil_pred.predict(events, prices, world_state, market_prices=mp_dicts, db_conn=conn),
-            ceasefire_pred.predict(events, market_prices=mp_dicts, db_conn=conn),
-            hormuz_pred.predict(events, world_state, market_prices=mp_dicts, db_conn=conn),
-        ))
-
-    # Initialize contract registry, prediction logger, and signal ledger
+    _persist_market_prices(conn, market_prices)
     registry = ContractRegistry(conn)
     registry.seed_initial_contracts()
     policy = MappingPolicy(registry=registry, min_effective_edge_pct=5.0)
     pred_logger = PredictionLogger(conn)
     ledger = SignalLedger(conn)
 
-    # Persist all predictions
-    for pred in predictions:
-        if dry_run:
-            news_ctx: list[dict] = []
-        else:
-            news_ctx = [
-                {"title": e["title"], "url": e["url"], "source": e["source"],
-                 "fetched_at": e.get("published_at", "")}
-                for e in events[:20]
-            ]
-        # cascade_inputs nullable -- ceasefire model has no cascade
-        cascade_ctx = None
-        pred_logger.log_prediction(run_id, pred, news_ctx, cascade_ctx)
+    for prediction in predictions:
+        news_context = [] if dry_run else [
+            {
+                "title": event["title"],
+                "url": event["url"],
+                "source": event["source"],
+                "fetched_at": event.get("published_at", ""),
+            }
+            for event in events[:20]
+        ]
+        pred_logger.log_prediction(
+            run_id,
+            prediction,
+            news_context,
+            None,
+            data_environment=runtime.data_environment,
+        )
 
-    # Recalibrate predictions using bucket-based historical correction
     raw_probs: dict[str, float] = {}
-    for pred in predictions:
-        calibrated, raw = recalibrate_probability(pred.probability, pred.model_id, conn)
-        raw_probs[pred.model_id] = raw
-        if calibrated != raw:
-            logger.info("Recalibrated %s: %.2f -> %.2f", pred.model_id, raw, calibrated)
-            pred.probability = calibrated
+    for prediction in predictions:
+        calibrated, raw = recalibrate_probability(prediction.probability, prediction.model_id, conn)
+        raw_probs[prediction.model_id] = raw
+        prediction.probability = calibrated
 
-    # Auto-tune from historical performance
     policy.update_thresholds_from_history(conn)
     policy.update_discounts_from_history(conn)
 
-    # Contract-aware mapping with signal ledger
     all_signals = []
-    for pred in predictions:
-        mappings = policy.evaluate(pred, market_prices)
+    active_contracts = {contract.ticker: contract for contract in registry.get_active_contracts()}
+    for prediction in predictions:
+        mappings = policy.evaluate(prediction, market_prices)
         for mapping in mappings:
-            # Find matching market price for this contract
-            mp = next((m for m in market_prices if m.ticker == mapping.contract_ticker), None)
-            if mp is None:
+            market = next((m for m in market_prices if m.ticker == mapping.contract_ticker), None)
+            if market is None:
                 continue
-            # Find contract title from registry
-            contract_title = None
-            active = registry.get_active_contracts()
-            for c in active:
-                if c.ticker == mapping.contract_ticker:
-                    contract_title = c.title
-                    break
             signal = ledger.record_signal(
-                pred, mapping, mp,
-                contract_title=contract_title,
+                prediction,
+                mapping,
+                market,
+                contract_title=active_contracts.get(mapping.contract_ticker).title if mapping.contract_ticker in active_contracts else None,
                 run_id=run_id,
-                raw_probability=raw_probs.get(pred.model_id),
+                raw_probability=raw_probs.get(prediction.model_id),
+                data_environment=runtime.data_environment,
+                execution_environment=runtime.execution_environment,
             )
             all_signals.append(signal)
 
-    # Convert actionable signals to Divergence objects for existing paper trade + display code
-    divergences = []
-    for sig in all_signals:
-        if sig.signal in ("BUY_YES", "BUY_NO"):
-            pred_match = next((p for p in predictions if p.model_id == sig.model_id), None)
-            mp_match = next((m for m in market_prices if m.ticker == sig.contract_ticker), None)
-            if pred_match and mp_match:
-                pred_match.kalshi_ticker = sig.contract_ticker
-                div = Divergence(
-                    model_id=sig.model_id,
-                    prediction=pred_match,
-                    market_price=mp_match,
-                    model_probability=sig.model_probability,
-                    market_probability=sig.market_yes_price,
-                    edge=sig.effective_edge,
-                    edge_pct=sig.effective_edge * 100,
-                    signal=sig.signal,
-                    strength="strong" if abs(sig.effective_edge) > 0.15 else "moderate" if abs(sig.effective_edge) > 0.10 else "weak",
-                    created_at=sig.created_at,
-                )
-                divergences.append(div)
-
-    # Paper trades
-    trade_table = ""
+    trade_journal: list[dict] = []
     if not dry_run and not no_trade:
         kalshi_key = os.environ.get("KALSHI_API_KEY", "")
         kalshi_pk = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
         if kalshi_key and kalshi_pk:
             kalshi = KalshiClient(api_key=kalshi_key, private_key_path=kalshi_pk)
-            tracker = PaperTradeTracker(kalshi_client=kalshi)
-            for div in divergences:
-                if div.strength == "strong" and div.signal != "HOLD":
-                    await tracker.open_trade(div)
-            trade_table = tracker.to_table()
+            tracker = PaperTradeTracker(conn=conn, ledger=ledger, kalshi_client=kalshi)
+            for signal in ledger.get_actionable_signals():
+                qty = 10 if signal.suggested_size == "full" else 5
+                await tracker.execute_signal(signal, quantity=qty)
+            trade_journal = tracker.get_trade_journal()
+    else:
+        trade_journal = []
 
-    # Format and output
-    brief = _format_brief(predictions, market_prices, divergences, budget, trade_table, signals=all_signals)
+    refreshed_signals = ledger.get_signals(limit=200)
+    brief = _format_brief(
+        predictions,
+        market_prices,
+        [],
+        budget,
+        signals=refreshed_signals,
+        runtime=runtime,
+        trade_journal=trade_journal,
+    )
     print(brief)
 
-    # Write structured JSON for scheduled/cron runs
     if scheduled:
         _write_scheduled_output(
-            run_id=run_id,
-            predictions=predictions,
-            signals=all_signals,
-            divergence_count=len(divergences),
+            run_id,
+            predictions,
+            refreshed_signals,
+            runtime,
+            trade_journal,
+            divergence_count=len(refreshed_signals),
             log_dir=log_dir,
         )
 
+    conn.close()
     return brief
 
 
 async def _run_check_resolutions() -> None:
-    """Poll Kalshi production API for settled contracts and backfill signal_ledger."""
     from parallax.scoring.resolution import check_resolutions
 
-    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-    conn = duckdb.connect(db_path)
+    runtime = resolve_runtime_config(dry_run=False)
+    conn = duckdb.connect(runtime.db_path)
     create_tables(conn)
-
     api_key = os.environ.get("KALSHI_API_KEY", "")
     pk_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
     if not api_key or not pk_path:
@@ -424,132 +502,53 @@ async def _run_check_resolutions() -> None:
         conn.close()
         return
 
-    PROD_URL = "https://api.elections.kalshi.com/trade-api/v2"
-    client = KalshiClient(api_key=api_key, private_key_path=pk_path, base_url=PROD_URL)
+    client = KalshiClient(
+        api_key=api_key,
+        private_key_path=pk_path,
+        base_url="https://api.elections.kalshi.com/trade-api/v2",
+    )
     results = await check_resolutions(conn, client)
-
     if results:
         print(f"Resolved {len(results)} contract(s):")
-        for r in results:
-            print(f"  {r.get('ticker', '?')}: {r.get('result', '?')} (settlement: {r.get('resolution_price', '?')})")
+        for result in results:
+            print(
+                f"  {result['ticker']}: settlement={result['resolution_price']} "
+                f"signals={result['signals_updated']} positions={result['positions_closed']}"
+            )
     else:
         print("No contracts have settled since last check.")
-
     conn.close()
 
 
 def _run_calibration() -> None:
-    """Run calibration report and print to stdout."""
     from parallax.scoring.calibration import calibration_report
 
-    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-    conn = duckdb.connect(db_path)
+    runtime = resolve_runtime_config(dry_run=False)
+    conn = duckdb.connect(runtime.db_path)
     create_tables(conn)
-    report = calibration_report(conn)
-    print(report)
+    print(calibration_report(conn))
     conn.close()
 
 
 def _run_report_card() -> None:
-    """Run P&L report card and print to stdout."""
     from parallax.scoring.report_card import generate_report_card
 
-    db_path = os.environ.get("DUCKDB_PATH", ":memory:")
-    conn = duckdb.connect(db_path)
+    runtime = resolve_runtime_config(dry_run=False)
+    conn = duckdb.connect(runtime.db_path)
     create_tables(conn)
-    report = generate_report_card(conn)
-    print(report)
+    print(generate_report_card(conn))
     conn.close()
 
 
-def _map_predictions_to_markets_legacy(
-    predictions: list[PredictionOutput],
-    market_prices: list[MarketPrice],
-) -> list[PredictionOutput]:
-    """DEPRECATED: Legacy heuristic mapping. Replaced by MappingPolicy in Phase 1. Kept for reference."""
-    # Index markets by ticker prefix for fast lookup
-    markets_by_prefix: dict[str, list[MarketPrice]] = {}
-    for mp in market_prices:
-        # Extract prefix: "KXUSAIRANAGREEMENT-27-26MAY" → "KXUSAIRANAGREEMENT"
-        parts = mp.ticker.split("-")
-        prefix = parts[0]
-        markets_by_prefix.setdefault(prefix, []).append(mp)
-
-    for pred in predictions:
-        if pred.kalshi_ticker:
-            continue  # Already mapped
-
-        if pred.model_id == "ceasefire":
-            # Map to US-Iran agreement — closest proxy for ceasefire holding
-            # Prefer the nearest-term open market (highest urgency)
-            candidates = markets_by_prefix.get("KXUSAIRANAGREEMENT", [])
-            if candidates:
-                # Pick the one with most volume (most liquid = best price)
-                best = max(candidates, key=lambda m: m.volume)
-                pred.kalshi_ticker = best.ticker
-
-        elif pred.model_id == "hormuz_reopening":
-            # Map to Hormuz series or fall back to Iran agreement
-            candidates = markets_by_prefix.get("KXCLOSEHORMUZ", [])
-            if candidates:
-                best = max(candidates, key=lambda m: m.volume)
-                pred.kalshi_ticker = best.ticker
-            else:
-                # Fallback: Iran agreement is correlated with Hormuz reopening
-                candidates = markets_by_prefix.get("KXUSAIRANAGREEMENT", [])
-                if candidates:
-                    best = max(candidates, key=lambda m: m.volume)
-                    pred.kalshi_ticker = best.ticker
-
-        elif pred.model_id == "oil_price":
-            # Map to WTI max price targets
-            # KXWTIMAX-26DEC31-T125 = "Will WTI hit $125 by year end?"
-            # If model predicts decrease → low prob of hitting high targets
-            # If model predicts increase → high prob of hitting targets
-            candidates = markets_by_prefix.get("KXWTIMAX", [])
-            if candidates:
-                # Extract price target from ticker: "KXWTIMAX-26DEC31-T125" → 125
-                def _target(mp: MarketPrice) -> float:
-                    for part in mp.ticker.split("-"):
-                        if part.startswith("T"):
-                            try:
-                                return float(part[1:])
-                            except ValueError:
-                                pass
-                    return 0.0
-
-                # Pick the $120 target as baseline (closest to current ~$92-113 range)
-                # Model predicting decrease → prob of hitting $120 is LOW
-                # Model predicting increase → prob of hitting $120 is HIGH
-                target_120 = [m for m in candidates if _target(m) == 120]
-                target_125 = [m for m in candidates if _target(m) == 125]
-                best_candidates = target_120 or target_125 or candidates
-                best = max(best_candidates, key=lambda m: m.volume)
-                pred.kalshi_ticker = best.ticker
-
-                # Translate oil direction prediction into market probability
-                # Model says P(decrease) = 0.75 → P(WTI hits $120) ≈ 1 - 0.75 = 0.25
-                # Model says P(increase) = 0.80 → P(WTI hits $120) ≈ 0.80
-                if pred.direction == "decrease":
-                    pred.probability = 1.0 - pred.confidence
-                elif pred.direction == "increase":
-                    pred.probability = pred.confidence
-                # "stable" keeps probability as-is (around 0.5)
-
-    return predictions
-
-
 def _init_anthropic():
-    """Initialize Anthropic client from env."""
     import anthropic
+
     return anthropic.AsyncAnthropic()
 
 
 def _load_config() -> ScenarioConfig:
-    """Load scenario config from YAML."""
     if SCENARIO_CONFIG_PATH.exists():
         return load_scenario_config(SCENARIO_CONFIG_PATH)
-    # Fallback: find config relative to working directory
     alt = Path("backend/config/scenario_hormuz.yaml")
     if alt.exists():
         return load_scenario_config(alt)
@@ -557,65 +556,49 @@ def _load_config() -> ScenarioConfig:
 
 
 async def _fetch_gdelt_events() -> list[dict]:
-    """Fetch recent news events from Google News RSS + GDELT DOC API."""
-    from parallax.ingestion.google_news import fetch_google_news
     from parallax.ingestion.gdelt_doc import fetch_gdelt_docs
+    from parallax.ingestion.google_news import fetch_google_news
 
     events = []
     seen: set[str] = set()
-
-    # Fetch from both sources in parallel
     try:
-        gn_events, gdelt_events = await asyncio.gather(
+        google_news, gdelt_events = await asyncio.gather(
             fetch_google_news(seen_hashes=seen),
             fetch_gdelt_docs(timespan="24h", seen_hashes=seen),
             return_exceptions=True,
         )
-        if isinstance(gn_events, list):
-            events.extend(gn_events)
-            seen.update(e.event_hash for e in gn_events)
-        else:
-            logger.warning("Google News fetch failed: %s", gn_events)
+        if isinstance(google_news, list):
+            events.extend(google_news)
+            seen.update(event.event_hash for event in google_news)
         if isinstance(gdelt_events, list):
-            # Dedup against Google News results
-            for e in gdelt_events:
-                if e.event_hash not in seen:
-                    events.append(e)
-                    seen.add(e.event_hash)
-        else:
-            logger.warning("GDELT DOC fetch failed: %s", gdelt_events)
+            for event in gdelt_events:
+                if event.event_hash not in seen:
+                    events.append(event)
+                    seen.add(event.event_hash)
     except Exception:
         logger.exception("Failed to fetch news events")
 
-    logger.info(
-        "Fetched %d news events (%d Google News, %d GDELT DOC)",
-        len(events),
-        sum(1 for e in events if e.source == "google_news"),
-        sum(1 for e in events if e.source == "gdelt_doc"),
-    )
-
-    # Convert NewsEvent to dict format expected by prediction models
     return [
         {
-            "title": e.title,
-            "url": e.url,
-            "source": e.source,
-            "published_at": e.published_at.isoformat(),
-            "snippet": e.snippet,
-            "query": e.query,
+            "title": event.title,
+            "url": event.url,
+            "source": event.source,
+            "published_at": event.published_at.isoformat(),
+            "snippet": event.snippet,
+            "query": event.query,
         }
-        for e in events
+        for event in events
     ]
 
 
 async def _fetch_oil_prices() -> list[dict]:
-    """Fetch latest EIA oil prices."""
     api_key = os.environ.get("EIA_API_KEY", "")
     if not api_key:
         logger.warning("EIA_API_KEY not set, skipping oil price fetch")
         return []
     try:
         from parallax.ingestion.oil_prices import fetch_brent
+
         return await fetch_brent(api_key)
     except Exception:
         logger.exception("Failed to fetch oil prices")
@@ -623,38 +606,35 @@ async def _fetch_oil_prices() -> list[dict]:
 
 
 async def _fetch_kalshi_markets() -> list[MarketPrice]:
-    """Fetch Kalshi market prices for tracked tickers."""
     api_key = os.environ.get("KALSHI_API_KEY", "")
     pk_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH", "")
     if not api_key or not pk_path:
         logger.warning("Kalshi credentials not set, skipping market fetch")
         return []
-    # Use production API for market data (demo only has sports/crypto)
-    PROD_URL = "https://api.elections.kalshi.com/trade-api/v2"
     try:
         client = KalshiClient(
-            api_key=api_key, private_key_path=pk_path, base_url=PROD_URL,
+            api_key=api_key,
+            private_key_path=pk_path,
+            base_url="https://api.elections.kalshi.com/trade-api/v2",
         )
-        from parallax.markets.kalshi import IRAN_EVENT_TICKERS
-        prices = []
-        # Fetch markets for each known event ticker
+        prices: list[MarketPrice] = []
         for event_ticker in IRAN_EVENT_TICKERS:
             try:
                 data = await client._request(
-                    "GET", "/markets",
+                    "GET",
+                    "/markets",
                     params={"event_ticker": event_ticker, "limit": 10},
                 )
-                markets = data.get("markets", [])
-                for m in markets:
-                    if m.get("status") not in ("open", "active"):
+                for market in data.get("markets", []):
+                    if market.get("status") not in ("open", "active"):
                         continue
-                    ticker = m.get("ticker", "")
-                    if ticker and not any(p.ticker == ticker for p in prices):
-                        price = await client.get_market_price(ticker)
-                        if price.yes_price > 0 or price.no_price > 0:
-                            prices.append(price)
+                    ticker = market.get("ticker", "")
+                    if ticker and not any(existing.ticker == ticker for existing in prices):
+                        normalized = await client.get_market_price(ticker)
+                        if normalized.best_yes_ask is not None or normalized.best_no_ask is not None:
+                            prices.append(normalized)
             except Exception:
-                logger.debug("Failed to fetch event %s", event_ticker)
+                logger.debug("Failed to fetch Kalshi event %s", event_ticker, exc_info=True)
         return prices
     except Exception:
         logger.exception("Failed to fetch Kalshi markets")
@@ -662,7 +642,6 @@ async def _fetch_kalshi_markets() -> list[MarketPrice]:
 
 
 async def _fetch_polymarket_markets() -> list[MarketPrice]:
-    """Fetch Polymarket Iran-related market prices."""
     try:
         client = PolymarketClient()
         return await client.get_iran_markets()
@@ -672,60 +651,24 @@ async def _fetch_polymarket_markets() -> list[MarketPrice]:
 
 
 def main():
-    """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description="Parallax Daily Intelligence Brief",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Skip LLM calls, use mock predictions",
-    )
-    parser.add_argument(
-        "--no-trade",
-        action="store_true",
-        help="Show signals but do not execute paper trades",
-    )
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    parser.add_argument(
-        "--check-resolutions",
-        action="store_true",
-        help="Poll Kalshi for settled contracts and backfill outcomes",
-    )
-    parser.add_argument(
-        "--calibration",
-        action="store_true",
-        help="Print calibration report (requires 7+ days of data)",
-    )
-    parser.add_argument(
-        "--scheduled",
-        action="store_true",
-        help="Write structured JSON output to ~/parallax-logs/runs/ for cron automation",
-    )
-    parser.add_argument(
-        "--report-card",
-        action="store_true",
-        help="Print P&L report card with proxy class segmentation",
-    )
+    parser = argparse.ArgumentParser(description="Parallax Daily Intelligence Brief")
+    parser.add_argument("--dry-run", action="store_true", help="Use mock predictions and isolated dry-run storage")
+    parser.add_argument("--no-trade", action="store_true", help="Do not place paper orders")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
+    parser.add_argument("--check-resolutions", action="store_true", help="Backfill settled contracts")
+    parser.add_argument("--calibration", action="store_true", help="Print signal-quality report")
+    parser.add_argument("--scheduled", action="store_true", help="Write structured JSON output")
+    parser.add_argument("--report-card", action="store_true", help="Print trading report card")
     args = parser.parse_args()
 
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
-        logging.basicConfig(level=logging.WARNING)
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
     if args.check_resolutions:
         asyncio.run(_run_check_resolutions())
         return
-
     if args.calibration:
         _run_calibration()
         return
-
     if args.report_card:
         _run_report_card()
         return

@@ -37,11 +37,17 @@ def make_market_price(
     ticker: str = "KXTEST",
     source: str = "kalshi",
 ) -> MarketPrice:
+    no_price = 1.0 - yes_price
     return MarketPrice(
         ticker=ticker,
         source=source,
+        best_yes_bid=max(yes_price - 0.01, 0.0),
+        best_yes_ask=yes_price,
+        best_no_bid=max(no_price - 0.01, 0.0),
+        best_no_ask=no_price,
         yes_price=yes_price,
-        no_price=1.0 - yes_price,
+        no_price=no_price,
+        derived_price_kind="midpoint",
         volume=10000,
         fetched_at=datetime.now(timezone.utc),
     )

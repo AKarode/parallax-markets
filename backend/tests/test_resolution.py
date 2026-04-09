@@ -31,12 +31,15 @@ def _insert_signal(conn, ticker: str, signal: str, market_yes_price: float,
         INSERT INTO signal_ledger
         (signal_id, created_at, model_id, model_claim, model_probability,
          model_timeframe, contract_ticker, proxy_class, confidence_discount,
-         market_yes_price, market_no_price, raw_edge, effective_edge, signal,
-         resolution_price, resolved_at, realized_pnl, model_was_correct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         market_yes_price, market_no_price, entry_side, entry_price,
+         raw_edge, effective_edge, signal, resolution_price, resolved_at,
+         realized_pnl, model_was_correct)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [signal_id, now, "test_model", "test claim", 0.7, "7d",
          ticker, "direct", 1.0, market_yes_price, market_no_price,
+         "yes" if signal == "BUY_YES" else "no",
+         market_yes_price if signal == "BUY_YES" else market_no_price,
          0.1, 0.1, signal,
          resolution_price, resolved_at, realized_pnl, model_was_correct],
     )

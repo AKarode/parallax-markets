@@ -55,8 +55,15 @@ class MappingResult(BaseModel):
     prediction_model_id: str
     contract_ticker: str
     proxy_class: ProxyClass
-    raw_edge: float
+    buy_yes_edge: float | None = None
+    buy_no_edge: float | None = None
+    raw_edge: float | None = None
     confidence_discount: float
-    effective_edge: float  # raw_edge * confidence_discount
+    effective_edge: float | None = None
+    entry_side: str | None = None
+    entry_price: float | None = None
+    entry_price_kind: str | None = None
+    entry_price_is_executable: bool = False
+    tradeability_status: str = "unknown"
     should_trade: bool
     reason: str

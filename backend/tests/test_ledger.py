@@ -53,9 +53,16 @@ def sample_mapping():
         prediction_model_id="ceasefire",
         contract_ticker="KXUSAIRANAGREEMENT-27",
         proxy_class=ProxyClass.NEAR_PROXY,
+        buy_yes_edge=0.17,
+        buy_no_edge=-0.04,
         raw_edge=0.17,
         confidence_discount=0.6,
         effective_edge=0.102,
+        entry_side="yes",
+        entry_price=0.48,
+        entry_price_kind="best_yes_ask",
+        entry_price_is_executable=True,
+        tradeability_status="tradable",
         should_trade=True,
         reason="NEAR PROXY match, edge +10.2%",
     )
@@ -67,8 +74,13 @@ def sample_market():
     return MarketPrice(
         ticker="KXUSAIRANAGREEMENT-27",
         source="kalshi",
+        best_yes_bid=0.47,
+        best_yes_ask=0.48,
+        best_no_bid=0.51,
+        best_no_ask=0.52,
         yes_price=0.48,
         no_price=0.52,
+        derived_price_kind="midpoint",
         volume=8500,
         fetched_at=datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc),
     )
@@ -157,16 +169,22 @@ class TestRecordSignal:
             prediction_model_id="ceasefire",
             contract_ticker="KXUSAIRANAGREEMENT-27",
             proxy_class=ProxyClass.LOOSE_PROXY,
+            buy_yes_edge=0.05,
             raw_edge=0.05,
             confidence_discount=0.3,
             effective_edge=0.015,
+            entry_side="yes",
+            entry_price=0.48,
+            entry_price_kind="best_yes_ask",
+            entry_price_is_executable=True,
+            tradeability_status="tradable",
             should_trade=False,
             reason="Rejected: edge 1.5% below 5.0% threshold",
         )
         result = ledger.record_signal(
             sample_prediction, mapping, sample_market,
         )
-        assert result.signal == "REFUSED"
+        assert result.signal == "HOLD"
 
     def test_record_signal_buy_no(self, ledger, sample_market):
         """Negative effective_edge should produce BUY_NO."""
@@ -187,9 +205,15 @@ class TestRecordSignal:
             prediction_model_id="ceasefire",
             contract_ticker="KXUSAIRANAGREEMENT-27",
             proxy_class=ProxyClass.NEAR_PROXY,
+            buy_no_edge=0.18,
             raw_edge=-0.18,
             confidence_discount=0.6,
             effective_edge=-0.108,
+            entry_side="no",
+            entry_price=0.52,
+            entry_price_kind="best_no_ask",
+            entry_price_is_executable=True,
+            tradeability_status="tradable",
             should_trade=True,
             reason="NEAR PROXY match, edge -10.8%",
         )
@@ -240,8 +264,13 @@ class TestGetSignals:
         oil_market = MarketPrice(
             ticker="KXWTIMAX-26DEC31",
             source="kalshi",
+            best_yes_bid=0.54,
+            best_yes_ask=0.55,
+            best_no_bid=0.44,
+            best_no_ask=0.45,
             yes_price=0.55,
             no_price=0.45,
+            derived_price_kind="midpoint",
             volume=12000,
             fetched_at=datetime.now(timezone.utc),
         )

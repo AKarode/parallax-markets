@@ -159,7 +159,8 @@ class TestKalshiClientMocked:
         ob = await self.client.get_orderbook("HORMUZ-26APR15")
         assert ob.ticker == "HORMUZ-26APR15"
         assert len(ob.yes_bids) == 1
-        assert ob.yes_bids[0].price == 35
+        assert ob.yes_bids[0].price == 0.35
+        assert ob.yes_asks[0].price == 0.35
 
     async def test_place_order(self):
         self._responses = [(200, {"order": {"order_id": "abc123", "status": "pending"}})]

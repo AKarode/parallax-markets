@@ -1,9 +1,4 @@
-"""Resolution checker -- polls Kalshi for settled contracts, backfills signal_ledger.
-
-Closes the feedback loop: prediction -> signal -> trade -> resolution -> evaluation.
-Queries signal_ledger for unresolved BUY_YES/BUY_NO signals, checks settlement status
-via Kalshi production API, and backfills resolution_price, realized_pnl, model_was_correct.
-"""
+"""Resolution checker for signal-quality and traded-position backfills."""
 
 from __future__ import annotations
 
@@ -17,18 +12,18 @@ from parallax.markets.kalshi import KalshiClient
 logger = logging.getLogger(__name__)
 
 
+def _normalize_settled_at(value: str | datetime | int | float) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+    return str(value)
+
+
 async def _check_market_resolution(
-    client: KalshiClient, ticker: str,
+    client: KalshiClient,
+    ticker: str,
 ) -> dict | None:
-    """Check if a Kalshi market has settled.
-
-    Args:
-        client: Kalshi API client (must use production URL).
-        ticker: Market ticker to check.
-
-    Returns:
-        Resolution dict if settled, None if still active.
-    """
     data = await client._request("GET", f"/markets/{ticker}")
     market = data.get("market", data)
 
@@ -36,30 +31,22 @@ async def _check_market_resolution(
     if status not in ("determined", "finalized"):
         return None
 
-    result = market.get("result", "")
     settlement_value = market.get("settlement_value", "0")
-    settlement_ts = market.get("settlement_ts")
-
-    # Validate settlement_value is numeric and in range 0.0-1.0 (T-02-04)
     try:
         resolution_price = float(settlement_value)
     except (TypeError, ValueError):
-        logger.warning(
-            "Invalid settlement_value for %s: %r", ticker, settlement_value,
-        )
+        logger.warning("Invalid settlement_value for %s: %r", ticker, settlement_value)
         return None
 
     if not (0.0 <= resolution_price <= 1.0):
-        logger.warning(
-            "Settlement value out of range for %s: %s", ticker, resolution_price,
-        )
+        logger.warning("Settlement value out of range for %s: %s", ticker, resolution_price)
         return None
 
     return {
         "status": status,
-        "result": result,
+        "result": market.get("result", ""),
         "resolution_price": resolution_price,
-        "settled_at": settlement_ts,
+        "settled_at": market.get("settlement_ts"),
     }
 
 
@@ -67,50 +54,22 @@ def _backfill_signal(
     conn: duckdb.DuckDBPyConnection,
     ticker: str,
     resolution_price: float,
-    settled_at: str | datetime,
+    settled_at: str | datetime | int | float,
 ) -> int:
-    """Backfill signal_ledger rows with resolution outcome.
-
-    Updates only rows where resolution_price IS NULL to prevent double-update (T-02-05).
-
-    P&L formulas:
-        BUY_YES: resolution_price - market_yes_price
-        BUY_NO:  (1.0 - resolution_price) - market_no_price
-        HOLD/REFUSED: NULL
-
-    model_was_correct:
-        BUY_YES and resolution_price > 0.5: True
-        BUY_NO and resolution_price <= 0.5: True
-        Otherwise: False
-
-    Args:
-        conn: DuckDB connection.
-        ticker: Contract ticker to backfill.
-        resolution_price: Settlement price (0.0 or 1.0 for binary).
-        settled_at: Settlement timestamp.
-
-    Returns:
-        Number of rows updated.
-    """
-    if isinstance(settled_at, datetime):
-        resolved_at_str = settled_at.isoformat()
-    elif isinstance(settled_at, (int, float)):
-        # Unix epoch timestamp from Kalshi API
-        resolved_at_str = datetime.fromtimestamp(
-            settled_at, tz=timezone.utc,
-        ).isoformat()
-    else:
-        resolved_at_str = str(settled_at)
-
-    # Use parameterized SQL with CASE WHEN for signal-dependent logic (T-02-05)
-    result = conn.execute(
+    resolved_at = _normalize_settled_at(settled_at)
+    conn.execute(
         """
         UPDATE signal_ledger
         SET resolution_price = ?,
             resolved_at = ?,
             realized_pnl = CASE
-                WHEN signal = 'BUY_YES' THEN ? - market_yes_price
-                WHEN signal = 'BUY_NO' THEN (1.0 - ?) - market_no_price
+                WHEN signal = 'BUY_YES' AND entry_price IS NOT NULL THEN ? - entry_price
+                WHEN signal = 'BUY_NO' AND entry_price IS NOT NULL THEN (1.0 - ?) - entry_price
+                ELSE NULL
+            END,
+            counterfactual_pnl = CASE
+                WHEN signal = 'BUY_YES' AND entry_price IS NOT NULL THEN ? - entry_price
+                WHEN signal = 'BUY_NO' AND entry_price IS NOT NULL THEN (1.0 - ?) - entry_price
                 ELSE NULL
             END,
             model_was_correct = CASE
@@ -128,46 +87,95 @@ def _backfill_signal(
         WHERE contract_ticker = ?
           AND resolution_price IS NULL
         """,
-        [resolution_price, resolved_at_str,
-         resolution_price, resolution_price,
-         resolution_price, resolution_price,
-         resolution_price, resolution_price,
-         ticker],
+        [
+            resolution_price,
+            resolved_at,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            ticker,
+        ],
     )
 
-    # DuckDB returns rowcount via fetchone on UPDATE
-    # Use a follow-up query to count affected rows
     count = conn.execute(
         """
-        SELECT COUNT(*) FROM signal_ledger
+        SELECT COUNT(*)
+        FROM signal_ledger
         WHERE contract_ticker = ?
-          AND resolution_price IS NOT NULL
           AND resolved_at = ?
         """,
-        [ticker, resolved_at_str],
+        [ticker, resolved_at],
     ).fetchone()[0]
+    return int(count)
 
-    return count
+
+def _close_positions(
+    conn: duckdb.DuckDBPyConnection,
+    ticker: str,
+    resolution_price: float,
+    settled_at: str | datetime | int | float,
+) -> int:
+    resolved_at = _normalize_settled_at(settled_at)
+    conn.execute(
+        """
+        UPDATE trade_positions
+        SET resolution_price = ?,
+            resolution_source = 'kalshi_settlement',
+            settlement_price = CASE
+                WHEN side = 'yes' THEN ?
+                WHEN side = 'no' THEN (1.0 - ?)
+                ELSE NULL
+            END,
+            exit_price = CASE
+                WHEN side = 'yes' THEN ?
+                WHEN side = 'no' THEN (1.0 - ?)
+                ELSE NULL
+            END,
+            closed_at = ?,
+            status = 'closed',
+            open_quantity = 0,
+            realized_pnl = CASE
+                WHEN side = 'yes' THEN (? - entry_price) * quantity
+                WHEN side = 'no' THEN ((1.0 - ?) - entry_price) * quantity
+                ELSE NULL
+            END,
+            unrealized_pnl = NULL
+        WHERE ticker = ?
+          AND status = 'open'
+        """,
+        [
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolution_price,
+            resolved_at,
+            resolution_price,
+            resolution_price,
+            ticker,
+        ],
+    )
+    row = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM trade_positions
+        WHERE ticker = ?
+          AND closed_at = ?
+        """,
+        [ticker, resolved_at],
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 async def check_resolutions(
     conn: duckdb.DuckDBPyConnection,
     kalshi_client: KalshiClient,
 ) -> list[dict]:
-    """Poll Kalshi for settled contracts and backfill signal_ledger.
-
-    Queries signal_ledger for distinct contract tickers with unresolved
-    BUY_YES/BUY_NO signals, checks each against Kalshi production API,
-    and backfills resolution data for any that have settled.
-
-    Args:
-        conn: DuckDB connection.
-        kalshi_client: Kalshi API client (must use production URL).
-
-    Returns:
-        List of resolution dicts for contracts that were resolved.
-    """
-    # Find distinct tickers with unresolved actionable signals
     rows = conn.execute(
         """
         SELECT DISTINCT contract_ticker
@@ -176,36 +184,42 @@ async def check_resolutions(
           AND signal IN ('BUY_YES', 'BUY_NO')
         """
     ).fetchall()
-
     tickers = [row[0] for row in rows]
     if not tickers:
         logger.info("No unresolved signals to check")
         return []
-
-    logger.info("Checking resolution status for %d ticker(s)", len(tickers))
 
     results = []
     for ticker in tickers:
         try:
             resolution = await _check_market_resolution(kalshi_client, ticker)
             if resolution is None:
-                logger.debug("Ticker %s still active", ticker)
                 continue
 
-            n = _backfill_signal(
-                conn, ticker,
+            signal_updates = _backfill_signal(
+                conn,
+                ticker,
                 resolution["resolution_price"],
                 resolution["settled_at"],
             )
+            position_updates = _close_positions(
+                conn,
+                ticker,
+                resolution["resolution_price"],
+                resolution["settled_at"],
+            )
+
             resolution["ticker"] = ticker
-            resolution["signals_updated"] = n
+            resolution["signals_updated"] = signal_updates
+            resolution["positions_closed"] = position_updates
             results.append(resolution)
             logger.info(
-                "Resolved %s: %s, backfilled %d signal(s)",
-                ticker, resolution["result"], n,
+                "Resolved %s: signal rows=%d, positions=%d",
+                ticker,
+                signal_updates,
+                position_updates,
             )
         except Exception:
-            # T-02-07: Don't crash on individual API failures
             logger.warning("Failed to check resolution for %s", ticker, exc_info=True)
             continue
 

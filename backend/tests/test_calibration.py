@@ -37,15 +37,20 @@ def _insert_signal(
         INSERT INTO signal_ledger
         (signal_id, created_at, model_id, model_claim, model_probability,
          model_timeframe, contract_ticker, proxy_class, confidence_discount,
-         market_yes_price, market_no_price, raw_edge, effective_edge,
-         signal, model_was_correct, realized_pnl)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         market_yes_price, market_no_price, entry_side, entry_price, raw_edge,
+         effective_edge, signal, model_was_correct, realized_pnl,
+         counterfactual_pnl, resolution_price, resolved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             signal_id, now, model_id, "test claim", model_probability,
             "7d", "KXTEST-01", proxy_class, 1.0,
-            0.50, 0.50, effective_edge, effective_edge,
+            0.50, 0.50,
+            "yes" if signal == "BUY_YES" else "no",
+            0.50,
+            effective_edge, effective_edge,
             signal, model_was_correct, realized_pnl,
+            realized_pnl, 1.0 if signal == "BUY_YES" else 0.0, now,
         ],
     )
 
@@ -194,7 +199,7 @@ class TestCalibrationReportFormat:
                        model_probability=0.35, effective_edge=0.05, realized_pnl=-0.04)
 
         result = calibration_report(conn)
-        assert "PARALLAX CALIBRATION REPORT" in result
+        assert "PARALLAX SIGNAL-QUALITY REPORT" in result
         assert "HIT RATE BY PROXY CLASS" in result
         assert "CALIBRATION CURVE" in result
         assert "EDGE DECAY" in result

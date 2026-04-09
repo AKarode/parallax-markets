@@ -38,11 +38,17 @@ def _make_market_price(
     ticker: str,
     yes_price: float = 0.5,
 ) -> MarketPrice:
+    no_price = 1.0 - yes_price
     return MarketPrice(
         ticker=ticker,
         source="kalshi",
+        best_yes_bid=max(yes_price - 0.01, 0.0),
+        best_yes_ask=yes_price,
+        best_no_bid=max(no_price - 0.01, 0.0),
+        best_no_ask=no_price,
         yes_price=yes_price,
-        no_price=1.0 - yes_price,
+        no_price=no_price,
+        derived_price_kind="midpoint",
         volume=1000.0,
         fetched_at=datetime.now(tz=timezone.utc),
     )
@@ -300,13 +306,22 @@ class TestDiscountFromHistory:
                     signal_id, run_id, created_at, model_id, model_claim,
                     model_probability, model_timeframe, contract_ticker,
                     proxy_class, confidence_discount, market_yes_price,
-                    market_no_price, raw_edge, effective_edge, signal,
-                    model_was_correct
+                    market_no_price, entry_side, entry_price, raw_edge,
+                    effective_edge, signal, model_was_correct, resolution_price,
+                    resolved_at, realized_pnl, counterfactual_pnl
                 ) VALUES (?, ?, CURRENT_TIMESTAMP, 'test', 'claim',
                           0.6, '14d', 'KXTEST', ?, 0.6, 0.5, 0.5,
-                          0.1, 0.06, 'BUY_YES', ?)
+                          'yes', 0.5, 0.1, 0.06, 'BUY_YES', ?, 1.0,
+                          CURRENT_TIMESTAMP, ?, ?)
                 """,
-                [f"sig-{proxy_class}-{i}", f"run-{i}", proxy_class, is_correct],
+                [
+                    f"sig-{proxy_class}-{i}",
+                    f"run-{i}",
+                    proxy_class,
+                    is_correct,
+                    0.1 if is_correct else -0.1,
+                    0.1 if is_correct else -0.1,
+                ],
             )
 
     def test_no_data_defaults_unchanged(self, conn_and_policy: tuple) -> None:

@@ -1,9 +1,4 @@
-"""Divergence detector: compares model predictions against market prices.
-
-Flags divergences where the model's probability estimate differs
-significantly from the market-implied probability, generating
-BUY_YES / BUY_NO / HOLD signals.
-"""
+"""Divergence detector using executable entry prices rather than snapshots."""
 
 from __future__ import annotations
 
@@ -19,22 +14,29 @@ logger = logging.getLogger(__name__)
 
 
 class Divergence(BaseModel):
-    """A detected divergence between model prediction and market price."""
+    """A detected divergence between model prediction and a specific entry path."""
 
     model_id: str
     prediction: PredictionOutput
     market_price: MarketPrice
     model_probability: float
-    market_probability: float
-    edge: float  # model_prob - market_prob (positive = model thinks underpriced)
-    edge_pct: float  # edge as percentage
-    signal: str  # "BUY_YES", "BUY_NO", "HOLD"
-    strength: str  # "strong" (>15%), "moderate" (10-15%), "weak" (5-10%)
+    market_probability: float | None
+    buy_yes_edge: float | None
+    buy_no_edge: float | None
+    edge: float
+    edge_pct: float
+    signal: str
+    strength: str
+    entry_side: str | None
+    entry_price: float | None
+    entry_price_kind: str | None
+    entry_price_is_executable: bool
+    tradeability_status: str
     created_at: datetime
 
 
 class DivergenceDetector:
-    """Compare model predictions against market prices and flag divergences."""
+    """Compare model predictions against executable quotes and flag trades."""
 
     def __init__(self, min_edge_pct: float = 5.0) -> None:
         self._min_edge = min_edge_pct / 100.0
@@ -44,86 +46,99 @@ class DivergenceDetector:
         predictions: list[PredictionOutput],
         market_prices: list[MarketPrice],
     ) -> list[Divergence]:
-        """Compare model predictions against market prices.
-
-        Matching logic: Match predictions to markets by kalshi_ticker
-        or polymarket_id. A prediction gets matched to the corresponding
-        MarketPrice by ticker.
-
-        Signal logic:
-        - If model_prob > market_prob + min_edge: BUY_YES
-        - If model_prob < market_prob - min_edge: BUY_NO
-        - Otherwise: HOLD
-
-        Strength:
-        - |edge| > 0.15: "strong"
-        - |edge| > 0.10: "moderate"
-        - |edge| > 0.05: "weak"
-        """
-        # Build lookup: ticker -> MarketPrice
-        market_by_ticker: dict[str, MarketPrice] = {}
-        for mp in market_prices:
-            market_by_ticker[mp.ticker] = mp
-
+        market_by_ticker = {market.ticker: market for market in market_prices}
         divergences: list[Divergence] = []
 
-        for pred in predictions:
-            matched_market = self._match_prediction(pred, market_by_ticker)
+        for prediction in predictions:
+            matched_market = self._match_prediction(prediction, market_by_ticker)
             if matched_market is None:
                 continue
 
-            model_prob = pred.probability
-            market_prob = matched_market.yes_price
-            edge = model_prob - market_prob
-            abs_edge = abs(edge)
+            model_yes_probability = prediction.probability
+            model_no_probability = 1.0 - model_yes_probability
+            buy_yes_edge = None
+            buy_no_edge = None
 
-            # Determine signal
-            if edge > self._min_edge:
-                signal = "BUY_YES"
-            elif edge < -self._min_edge:
-                signal = "BUY_NO"
+            if matched_market.best_yes_ask is not None:
+                buy_yes_edge = model_yes_probability - matched_market.best_yes_ask
+            if matched_market.best_no_ask is not None:
+                buy_no_edge = model_no_probability - matched_market.best_no_ask
+
+            signal = "HOLD"
+            edge = 0.0
+            entry_side = None
+            entry_price = None
+            entry_price_kind = None
+            entry_price_is_executable = False
+            tradeability_status = "tradable"
+
+            candidates: list[tuple[str, float, float]] = []
+            if buy_yes_edge is not None:
+                candidates.append(("yes", buy_yes_edge, matched_market.best_yes_ask or 0.0))
+            if buy_no_edge is not None:
+                candidates.append(("no", buy_no_edge, matched_market.best_no_ask or 0.0))
+
+            if not candidates:
+                tradeability_status = "non_tradable"
+                signal = "REFUSED"
             else:
-                signal = "HOLD"
+                best_side, best_edge, best_price = max(candidates, key=lambda item: item[1])
+                if best_edge >= self._min_edge:
+                    entry_side = best_side
+                    entry_price = best_price
+                    entry_price_is_executable = True
+                    entry_price_kind = (
+                        "best_yes_ask" if best_side == "yes" else "best_no_ask"
+                    )
+                    signal = "BUY_YES" if best_side == "yes" else "BUY_NO"
+                    edge = best_edge if best_side == "yes" else -best_edge
+                else:
+                    edge = best_edge if best_side == "yes" else -best_edge
 
-            # Determine strength
-            if abs_edge > 0.15:
-                strength = "strong"
-            elif abs_edge > 0.10:
-                strength = "moderate"
-            elif abs_edge > 0.05:
-                strength = "weak"
-            else:
-                strength = "negligible"
-
-            divergences.append(Divergence(
-                model_id=pred.model_id,
-                prediction=pred,
-                market_price=matched_market,
-                model_probability=model_prob,
-                market_probability=market_prob,
-                edge=edge,
-                edge_pct=edge * 100,
-                signal=signal,
-                strength=strength,
-                created_at=datetime.now(timezone.utc),
-            ))
+            divergences.append(
+                Divergence(
+                    model_id=prediction.model_id,
+                    prediction=prediction,
+                    market_price=matched_market,
+                    model_probability=model_yes_probability,
+                    market_probability=matched_market.reference_price(),
+                    buy_yes_edge=buy_yes_edge,
+                    buy_no_edge=buy_no_edge,
+                    edge=edge,
+                    edge_pct=edge * 100,
+                    signal=signal,
+                    strength=self._strength(abs(edge)),
+                    entry_side=entry_side,
+                    entry_price=entry_price,
+                    entry_price_kind=entry_price_kind,
+                    entry_price_is_executable=entry_price_is_executable,
+                    tradeability_status=tradeability_status,
+                    created_at=datetime.now(timezone.utc),
+                ),
+            )
 
         return divergences
+
+    @staticmethod
+    def _strength(abs_edge: float) -> str:
+        if abs_edge > 0.15:
+            return "strong"
+        if abs_edge > 0.10:
+            return "moderate"
+        if abs_edge > 0.05:
+            return "weak"
+        return "negligible"
 
     @staticmethod
     def _match_prediction(
         pred: PredictionOutput,
         market_by_ticker: dict[str, MarketPrice],
     ) -> MarketPrice | None:
-        """Find matching market for a prediction."""
-        # Try kalshi_ticker first
         if pred.kalshi_ticker and pred.kalshi_ticker in market_by_ticker:
             return market_by_ticker[pred.kalshi_ticker]
-        # Try polymarket_id
         if pred.polymarket_id and pred.polymarket_id in market_by_ticker:
             return market_by_ticker[pred.polymarket_id]
-        # Try matching by prediction_type in ticker
-        for ticker, mp in market_by_ticker.items():
+        for ticker, market in market_by_ticker.items():
             if pred.prediction_type.lower() in ticker.lower():
-                return mp
+                return market
         return None

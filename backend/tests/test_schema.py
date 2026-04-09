@@ -22,6 +22,11 @@ def test_create_tables_creates_all_expected_tables(db):
         "contract_proxy_map",
         "prediction_log",
         "signal_ledger",
+        "trade_orders",
+        "trade_fills",
+        "trade_positions",
+        "signal_quality_evaluation",
+        "trade_evaluation",
     }
     assert expected == table_names
 

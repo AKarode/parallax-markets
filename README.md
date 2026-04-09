@@ -1,59 +1,46 @@
 # Parallax
 
-**Prediction market edge-finder for the Iran-Hormuz crisis.**
+**Prediction-market edge finder for the Iran-Hormuz crisis.**
 
-Parallax ingests real-world news, runs AI prediction models with causal reasoning, compares predictions against live Kalshi/Polymarket prices, and flags mispriced contracts. Built for a single analyst exploiting second-order effects that sentiment bots miss.
+Parallax ingests news, runs AI prediction models, normalizes live Kalshi and Polymarket quotes, computes edge against executable entry prices, and records a paper-trading journal with order attempts, fills, and positions.
+
+## What Changed
+
+The repo now treats pricing and trading honestly:
+
+- executable quotes are explicit: `best_yes_bid`, `best_yes_ask`, `best_no_bid`, `best_no_ask`
+- derived prices are labeled and never used as execution inputs
+- signals can be `tradable`, `degraded`, or `non_tradable`
+- paper trading records `signal -> order attempt -> accepted/rejected/cancelled -> fill -> open position -> closed position`
+- trading report cards use only actually filled and later closed paper positions
+- signal-quality analysis remains available separately through counterfactual evaluation
+- dry-run data is isolated from demo/live data by default
 
 ## How It Works
 
-```
+```text
 News Sources                    Market Data
-  Google News RSS (5-15 min)      Kalshi API (production)
-  GDELT DOC API (15-60 min)       Polymarket API
-  EIA Oil Prices                          |
+  Google News RSS                 Kalshi API
+  GDELT DOC API                   Polymarket CLOB/Gamma
+  EIA Oil Prices                         |
          |                                |
          v                                v
-  3 Prediction Models              Market Prices
-  (Claude Sonnet + Cascade)        (live probabilities)
+  3 Prediction Models            Normalized Market Snapshots
+  (Claude + cascade)             executable + derived fields
          |                                |
-         +---------> Divergence <---------+
-                     Detector
-                        |
-                   Trade Signals
-              BUY_YES / BUY_NO / HOLD
-                        |
-              +---------+---------+
-              |                   |
-         Paper Trading      Signal Ledger
-       (Kalshi sandbox)    (DuckDB + calibration)
-                                  |
-                          Feedback Loop
-                    (recalibration, track records,
-                     discount auto-adjustment)
-```
-
-## Prediction Models
-
-| Model | What It Predicts | Method |
-|-------|-----------------|--------|
-| **Oil Price** | Brent/WTI direction + magnitude over 7 days | Cascade engine (blockade -> flow -> bypass -> price) + LLM reasoning |
-| **Ceasefire** | Probability of ceasefire holding 14 days | Diplomatic event filtering + LLM analysis |
-| **Hormuz Reopening** | Probability of strait reopening in 14 days | Cascade scenario modeling + LLM reasoning |
-
-Each model makes a single Claude Sonnet call (~$0.007/call). Total cost: ~$0.02 per brief run, well under the $20/day budget.
-
-## Dashboard
-
-Dark-themed Streamlit dashboard showing real-time predictions, signal history with contract descriptions, edge analysis charts, and prediction timeline.
-
-```bash
-cd backend && DUCKDB_PATH=data/parallax.duckdb streamlit run src/parallax/dashboard/app.py
-```
-
-Requires a pipeline run first to populate the database:
-
-```bash
-cd backend && DUCKDB_PATH=data/parallax.duckdb python -m parallax.cli.brief --no-trade
+         +----------> Mapping Policy <----+
+                        executable edge
+                              |
+                         Signal Ledger
+                explicit entry side/price semantics
+                              |
+                   +----------+-----------+
+                   |                      |
+            Signal-Quality Eval      Trade Journal
+            counterfactual only      orders / fills / positions
+                                             |
+                                      Trading Report Card
+                                     traded positions only
 ```
 
 ## Quick Start
@@ -62,90 +49,57 @@ cd backend && DUCKDB_PATH=data/parallax.duckdb python -m parallax.cli.brief --no
 
 - Python 3.11+
 - Anthropic API key
-- Kalshi account with API access (free)
+- Kalshi API credentials for live/demo reads and paper execution
 
 ### Setup
 
 ```bash
-# Clone and install
 cd backend
 pip install -e ".[dev]"
 
-# Create .env file
 cat > .env << 'EOF'
 ANTHROPIC_API_KEY=your-key
 KALSHI_API_KEY=your-kalshi-key-id
 KALSHI_PRIVATE_KEY_PATH=~/.kalshi/private_key.pem
 EIA_API_KEY=your-eia-key
-DUCKDB_PATH=data/parallax.duckdb
+PARALLAX_ENV=demo
+DUCKDB_PATH=data/parallax-demo.duckdb
 EOF
 
-# Load env and run
 set -a && source .env && set +a
 ```
-
-### Kalshi API Keys
-
-1. Create account at [kalshi.com](https://kalshi.com)
-2. Go to Settings -> API Keys
-3. Generate an RSA key pair
-4. Save the private key to `~/.kalshi/private_key.pem`
-5. Copy the API Key ID
 
 ### Run
 
 ```bash
-# Dry run (mock data, no API calls)
+# Isolated dry run: mock predictions + isolated in-memory DB
 python -m parallax.cli.brief --dry-run
 
-# Live predictions + real market prices (no trades)
+# Live predictions + real market prices, no paper execution
 python -m parallax.cli.brief --no-trade
 
-# Full pipeline with paper trade execution
+# Full demo paper-trading pipeline
 python -m parallax.cli.brief
 
-# With debug logging
-python -m parallax.cli.brief --no-trade -v
+# Signal-quality report (counterfactual, not traded P&L)
+python -m parallax.cli.brief --calibration
 
-# Scheduled mode (JSON output for cron)
-python -m parallax.cli.brief --scheduled
+# Trading report card (real paper positions only)
+python -m parallax.cli.brief --report-card
+
+# Settlement backfill
+python -m parallax.cli.brief --check-resolutions
 ```
 
-### Example Output
+## Data Environments
 
-```
-====================================================
-PARALLAX DAILY INTELLIGENCE BRIEF
-2026-04-09 05:56 UTC | Budget: $0.02/$20.00
-====================================================
+Parallax now keeps environments explicit:
 
---- PREDICTIONS ---
+- `--dry-run` uses `dry_run` data environment and isolated in-memory storage by default
+- `PARALLAX_ENV=demo` uses demo paper-trading storage, for example `data/parallax-demo.duckdb`
+- `PARALLAX_ENV=live` is for live-market data / future live execution, for example `data/parallax-live.duckdb`
 
-CEASEFIRE
-  Probability: 25%
-  Confidence: 70% | Timeframe: 14d
-  Reasoning: The ceasefire appears to be unraveling rapidly...
-
-HORMUZ REOPENING
-  Probability: 75%
-  Confidence: 65% | Timeframe: 14d
-  Reasoning: The current complete closure represents an unprecedented...
-
-OIL PRICE
-  Direction: decrease | Magnitude: $-5-$-2
-  Confidence: 70% | Timeframe: 7d
-  Reasoning: Significant disconnect between spot prices ($138.21)...
-
---- DIVERGENCES ---
-
-  SIGNAL: BUY_NO KXUSAIRANAGREEMENT-27
-  Model: 25% vs Market: 50% | Edge: -15.0% (moderate)
-
---- SIGNAL AUDIT ---
-
-  KXUSAIRANAGREEMENT-27   ceasefire       near_proxy   -15.0%  BUY_NO [HALF]
-  KXUSAIRANAGREEMENT-27   hormuz_reopen   loose_proxy   +7.5%  BUY_YES [HALF]
-```
+Persisted records include `data_environment` and execution environment fields so demo and live learning data do not silently mix.
 
 ## API Server
 
@@ -155,96 +109,87 @@ uvicorn parallax.main:app --reload
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/health` | GET | Pipeline status, budget, last fetch times |
-| `/api/predictions` | GET | Latest predictions from all 3 models |
-| `/api/markets` | GET | Live Kalshi + Polymarket prices |
-| `/api/divergences` | GET | Current divergence signals |
-| `/api/trades` | GET | Open paper trades with P&L |
-| `/api/brief/run` | POST | Trigger a full brief run |
+| `/api/health` | GET | Runtime status plus data/execution environment |
+| `/api/predictions` | GET | Latest predictions |
+| `/api/markets` | GET | Latest normalized market snapshots |
+| `/api/divergences` | GET | Current in-memory divergences |
+| `/api/trades` | GET | Order journal and tracked positions |
+| `/api/brief/run` | POST | Trigger a dry-run brief |
+
+## Storage Model
+
+Key tables:
+
+- `market_prices`: normalized executable quotes plus labeled derived fields
+- `signal_ledger`: mapping evaluation, tradability, entry semantics, execution linkages
+- `trade_orders`: every order attempt and outcome
+- `trade_fills`: actual fills
+- `trade_positions`: open/closed paper positions
+
+Key views:
+
+- `signal_quality_evaluation`: resolved signal-quality / counterfactual analysis
+- `trade_evaluation`: resolved traded-position analysis
 
 ## Architecture
 
-```
+```text
 backend/src/parallax/
-  cli/brief.py              # Main entry point - daily intelligence brief
-  main.py                   # FastAPI REST API
+  cli/brief.py              brief orchestration, market persistence, paper execution
+  main.py                   FastAPI API
   contracts/
-    schemas.py              # ContractRecord, MappingResult, ProxyClass
-    registry.py             # DuckDB-backed contract registry CRUD
-    mapping_policy.py       # Proxy-aware alignment, edge discounting, auto-tuning
+    mapping_policy.py       executable edge selection + proxy discounting
+    registry.py             contract registry
+    schemas.py              mapping result with entry semantics
   dashboard/
-    app.py                  # Streamlit dashboard (dark terminal theme)
-    data.py                 # Reusable data layer (pure DuckDB queries)
-  ingestion/
-    google_news.py          # Google News RSS poller
-    gdelt_doc.py            # GDELT DOC 2.0 API
-    oil_prices.py           # EIA API v2 (Brent/WTI)
-    entities.py             # Critical entity list (IRGC, CENTCOM, etc.)
-  markets/
-    kalshi.py               # Kalshi API client (RSA-PSS auth)
-    polymarket.py           # Polymarket read-only client
-    schemas.py              # MarketPrice, Orderbook, Position
-  prediction/
-    oil_price.py            # Oil price direction predictor
-    ceasefire.py            # Ceasefire probability predictor
-    hormuz.py               # Hormuz reopening predictor
-    schemas.py              # PredictionOutput model
-  divergence/
-    detector.py             # Model vs market comparison
-  scoring/
-    tracker.py              # Paper trade tracking + P&L
-    ledger.py               # Signal ledger with contract provenance
-    prediction_log.py       # Persisted model outputs with run context
-    resolution.py           # Kalshi settlement polling + P&L backfill
-    calibration.py          # Hit rate, calibration curve, edge decay
-    recalibration.py        # Bucket-based probability adjustment
-    report_card.py          # P&L by proxy class, significance tests
-    track_record.py         # Per-model hit rate for prompt injection
-  simulation/
-    cascade.py              # 6-rule cascade engine
-    world_state.py          # In-memory world state
-    config.py               # YAML scenario config
-  budget/
-    tracker.py              # $20/day LLM budget enforcement
+    app.py                  Streamlit dashboard
+    data.py                 dashboard/API query helpers
   db/
-    schema.py               # DuckDB schema (12 tables)
-    writer.py               # Async single-writer queue
+    runtime.py              environment + DB path resolution
+    schema.py               DuckDB schema + additive migrations
+    writer.py               async writer helper
+  divergence/
+    detector.py             executable-entry divergence detector
+  markets/
+    kalshi.py               Kalshi normalization, orderbook handling, sandbox orders
+    polymarket.py           Polymarket executable/derived quote normalization
+    schemas.py              market snapshot + orderbook schemas
+  prediction/
+    ceasefire.py
+    hormuz.py
+    oil_price.py
+    schemas.py
+  scoring/
+    calibration.py          signal-quality analysis
+    ledger.py               signal ledger with entry semantics
+    prediction_log.py       persisted predictions with environment labels
+    report_card.py          traded-only report card
+    resolution.py           settlement backfill for signals and positions
+    tracker.py              order/fill/position journal
+    track_record.py         prompt track record
 ```
-
-## Calibration Loop
-
-The system self-improves through three feedback mechanisms:
-
-1. **Discount auto-adjustment** -- proxy class discount factors (DIRECT=1.0, NEAR_PROXY=0.6, LOOSE_PROXY=0.3) shift toward historical hit rates using bounded EMA. DIRECT never drops below 0.8, LOOSE_PROXY never rises above 0.5.
-
-2. **Threshold tuning** -- per-class min_edge thresholds auto-raise when small edges historically lose (win_rate < 0.4 on edges < 8%).
-
-3. **Track record injection** -- each prediction model's prompt includes its own hit rate history, enabling self-correction based on past performance.
 
 ## Testing
 
 ```bash
 cd backend
-python -m pytest tests/ -x -v    # 241 tests
+python -m pytest tests/ -x -v
 ```
 
-## Key Design Decisions
+The executable-pricing and journal refactor is covered by focused tests for:
 
-- **3 models, not 50 agents**: Structured causal reasoning on oil/ceasefire/Hormuz beats shallow sentiment analysis at 1/100th the cost
-- **Cascade engine as causal model**: The 6-rule cascade chain (blockade -> flow -> bypass -> price -> downstream -> insurance) IS the reasoning that market bots miss
-- **Paper trading first**: Prove edge on Kalshi sandbox before risking capital
-- **P&L as eval**: Prediction market resolution replaces manual ground truth scoring
-- **Google News RSS over BigQuery**: Free, no auth, 5-15 min latency vs BigQuery's cost and credential requirements
-- **Self-calibrating pipeline**: All three tuning levers (discounts, thresholds, track records) activate automatically as data accumulates
+- Kalshi normalization
+- Polymarket normalization
+- divergence detection
+- mapping policy
+- signal ledger
+- resolution backfill
+- trade/report evaluation split
+- brief formatting and dry-run isolation
 
-## Context
+## Current Limitations
 
-- Active US-Iran war (Operation Epic Fury, Feb 28 2026). Khamenei killed. Strait of Hormuz was effectively closed.
-- 2-week ceasefire agreed April 7 2026, mediated by Pakistan. Talks in Islamabad.
-- Oil: Brent hit $118 Q1, dropped 16% to $92 on ceasefire. Pre-war ~$70.
-- $200M+ traded on Kalshi/Polymarket on Iran outcomes.
-- 30%+ of Polymarket wallets are AI bots. Edge is in reasoning depth, not speed.
-
-## License
-
-Private project. Not open source.
+- accepted-but-resting orders are recorded, but there is not yet a background reconciler for later partial fills
+- slippage and fee modeling are still thin outside venue response fields
+- there are no hard portfolio/risk controls yet
+- live trading remains out of scope; this is still a paper-trading system

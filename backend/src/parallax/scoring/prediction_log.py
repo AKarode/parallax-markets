@@ -25,6 +25,7 @@ class PredictionLogEntry(BaseModel):
 
     log_id: str
     run_id: str
+    data_environment: str = "live"
     model_id: str
     probability: float
     direction: str
@@ -49,6 +50,8 @@ class PredictionLogger:
         prediction: PredictionOutput,
         news_context: list[dict],
         cascade_inputs: dict | None = None,
+        *,
+        data_environment: str = "live",
     ) -> PredictionLogEntry:
         """Persist a prediction with full context.
 
@@ -66,6 +69,7 @@ class PredictionLogger:
         entry = PredictionLogEntry(
             log_id=log_id,
             run_id=run_id,
+            data_environment=data_environment,
             model_id=prediction.model_id,
             probability=prediction.probability,
             direction=prediction.direction,
@@ -81,14 +85,15 @@ class PredictionLogger:
         self._conn.execute(
             """
             INSERT INTO prediction_log
-            (log_id, run_id, model_id, probability, direction, confidence,
+            (log_id, run_id, data_environment, model_id, probability, direction, confidence,
              reasoning, evidence, timeframe, news_context, cascade_inputs,
              created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 entry.log_id,
                 entry.run_id,
+                entry.data_environment,
                 entry.model_id,
                 entry.probability,
                 entry.direction,
@@ -119,7 +124,7 @@ class PredictionLogger:
             rows = self._conn.execute(
                 """
                 SELECT log_id, run_id, model_id, probability, direction,
-                       confidence, reasoning, evidence, timeframe,
+                       data_environment, confidence, reasoning, evidence, timeframe,
                        news_context, cascade_inputs, created_at
                 FROM prediction_log
                 WHERE run_id = ?
@@ -132,7 +137,7 @@ class PredictionLogger:
             rows = self._conn.execute(
                 """
                 SELECT log_id, run_id, model_id, probability, direction,
-                       confidence, reasoning, evidence, timeframe,
+                       data_environment, confidence, reasoning, evidence, timeframe,
                        news_context, cascade_inputs, created_at
                 FROM prediction_log
                 ORDER BY created_at DESC
@@ -145,9 +150,9 @@ class PredictionLogger:
 
     def _row_to_entry(self, row: tuple) -> PredictionLogEntry:
         """Convert a DuckDB row tuple to a PredictionLogEntry."""
-        evidence_raw = row[7]
-        news_raw = row[9]
-        cascade_raw = row[10]
+        evidence_raw = row[8]
+        news_raw = row[10]
+        cascade_raw = row[11]
 
         return PredictionLogEntry(
             log_id=row[0],
@@ -155,11 +160,12 @@ class PredictionLogger:
             model_id=row[2],
             probability=row[3],
             direction=row[4],
-            confidence=row[5],
-            reasoning=row[6],
+            data_environment=row[5],
+            confidence=row[6],
+            reasoning=row[7],
             evidence=json.loads(evidence_raw) if isinstance(evidence_raw, str) else evidence_raw,
-            timeframe=row[8],
+            timeframe=row[9],
             news_context=json.loads(news_raw) if isinstance(news_raw, str) else news_raw,
             cascade_inputs=json.loads(cascade_raw) if isinstance(cascade_raw, str) and cascade_raw else cascade_raw if cascade_raw is not None else None,
-            created_at=row[11],
+            created_at=row[12],
         )

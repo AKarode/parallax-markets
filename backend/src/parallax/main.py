@@ -16,22 +16,22 @@ import duckdb
 from fastapi import FastAPI
 
 from parallax.db.schema import create_tables
+from parallax.db.runtime import resolve_runtime_config
 
 logger = logging.getLogger(__name__)
-
-DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/app/data/parallax.duckdb")
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize DuckDB and create tables on startup."""
-    db_path = DUCKDB_PATH
+    runtime = resolve_runtime_config(dry_run=False)
+    db_path = runtime.db_path
     if db_path != ":memory:":
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     conn = duckdb.connect(db_path)
     create_tables(conn)
     app.state.db = conn
+    app.state.runtime = runtime
 
     # Initialize market clients (optional — may not have credentials)
     app.state.kalshi = None
@@ -50,7 +50,12 @@ async def lifespan(app: FastAPI):
     from parallax.markets.polymarket import PolymarketClient
     app.state.polymarket = PolymarketClient()
 
-    logger.info("Parallax API started")
+    logger.info(
+        "Parallax API started (data_environment=%s execution_environment=%s db=%s)",
+        runtime.data_environment,
+        runtime.execution_environment,
+        db_path,
+    )
     yield
 
     conn.close()
@@ -70,6 +75,8 @@ async def health():
         "markets_count": len(app.state.last_markets),
         "divergences_count": len(app.state.last_divergences),
         "kalshi_configured": app.state.kalshi is not None,
+        "data_environment": app.state.runtime.data_environment,
+        "execution_environment": app.state.runtime.execution_environment,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -109,14 +116,38 @@ async def get_divergences():
 
 @app.get("/api/trades")
 async def get_trades():
-    """Return open paper trades with P&L."""
+    """Return order journal plus tracked positions."""
     try:
         conn = app.state.db
-        result = conn.execute("SELECT * FROM paper_trades ORDER BY opened_at DESC").fetchall()
-        columns = [desc[0] for desc in conn.description()]
-        return {"trades": [dict(zip(columns, row)) for row in result]}
+        orders = conn.execute(
+            """
+            SELECT
+                order_id, signal_id, ticker, side, quantity, intended_price,
+                status, submitted_at, accepted_at, rejected_at, cancelled_at,
+                avg_fill_price, venue_environment
+            FROM trade_orders
+            ORDER BY submitted_at DESC
+            """
+        ).fetchall()
+        order_columns = [desc[0] for desc in conn.description]
+        positions = conn.execute(
+            """
+            SELECT
+                position_id, signal_id, ticker, side, quantity, entry_price,
+                status, opened_at, closed_at, realized_pnl, unrealized_pnl,
+                venue_environment
+            FROM trade_positions
+            ORDER BY opened_at DESC
+            """
+        ).fetchall()
+        position_columns = [desc[0] for desc in conn.description]
+        return {
+            "orders": [dict(zip(order_columns, row)) for row in orders],
+            "positions": [dict(zip(position_columns, row)) for row in positions],
+            "data_environment": app.state.runtime.data_environment,
+        }
     except Exception:
-        return {"trades": []}
+        return {"orders": [], "positions": []}
 
 
 @app.post("/api/brief/run")

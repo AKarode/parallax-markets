@@ -34,25 +34,50 @@ def _insert_resolved_signal(
     created_at: datetime | None = None,
     resolved_at: datetime | None = None,
 ):
-    """Insert a resolved signal_ledger row for testing."""
+    """Insert a closed traded position plus its originating signal."""
     signal_id = str(uuid.uuid4())
+    position_id = str(uuid.uuid4())
     now = created_at or datetime.now(timezone.utc)
     res_at = resolved_at or (now + timedelta(hours=12))
+    ticker = f"KXTEST-{signal_id[:6]}"
+    side = "yes" if signal == "BUY_YES" else "no"
+    entry_price = market_yes_price if side == "yes" else market_no_price
     conn.execute(
         """
         INSERT INTO signal_ledger
         (signal_id, created_at, model_id, model_claim, model_probability,
          model_timeframe, contract_ticker, proxy_class, confidence_discount,
-         market_yes_price, market_no_price, raw_edge, effective_edge, signal,
-         resolution_price, resolved_at, realized_pnl, model_was_correct,
+         market_yes_price, market_no_price, entry_side, entry_price, position_id,
+         trade_id, traded, raw_edge, effective_edge, signal, resolution_price,
+         resolved_at, realized_pnl, counterfactual_pnl, model_was_correct,
          proxy_was_aligned)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            signal_id, now.isoformat(), model_id, "test claim", 0.7, "7d",
+            ticker, proxy_class, 1.0, market_yes_price, market_no_price,
+            side, entry_price, position_id, position_id, True, 0.1,
+            effective_edge, signal, resolution_price, res_at.isoformat(),
+            realized_pnl, realized_pnl, model_was_correct, proxy_was_aligned,
+        ],
+    )
+    conn.execute(
+        """
+        INSERT INTO trade_positions
+        (position_id, signal_id, run_id, ticker, venue, venue_environment, side,
+         quantity, open_quantity, entry_price, opened_at, exit_price,
+         settlement_price, closed_at, status, realized_pnl, unrealized_pnl,
+         resolution_price, resolution_source)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        [signal_id, now.isoformat(), model_id, "test claim", 0.7, "7d",
-         f"KXTEST-{signal_id[:6]}", proxy_class, 1.0,
-         market_yes_price, market_no_price, 0.1, effective_edge, signal,
-         resolution_price, res_at.isoformat(), realized_pnl, model_was_correct,
-         proxy_was_aligned],
+        [
+            position_id, signal_id, "run-1", ticker, "kalshi", "demo", side,
+            1, 0, entry_price, now.isoformat(),
+            resolution_price if side == "yes" else 1.0 - resolution_price,
+            resolution_price if side == "yes" else 1.0 - resolution_price,
+            res_at.isoformat(), "closed", realized_pnl, None,
+            resolution_price, "test",
+        ],
     )
     return signal_id
 
@@ -167,11 +192,12 @@ class TestProxyWasAlignedInResolution:
             INSERT INTO signal_ledger
             (signal_id, created_at, model_id, model_claim, model_probability,
              model_timeframe, contract_ticker, proxy_class, confidence_discount,
-             market_yes_price, market_no_price, raw_edge, effective_edge, signal)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             market_yes_price, market_no_price, entry_side, entry_price,
+             raw_edge, effective_edge, signal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [signal_id, now, "test", "claim", 0.7, "7d",
-             "KXALIGN-01", "DIRECT", 1.0, 0.40, 0.60, 0.1, 0.1, "BUY_YES"],
+             "KXALIGN-01", "DIRECT", 1.0, 0.40, 0.60, "yes", 0.40, 0.1, 0.1, "BUY_YES"],
         )
 
         settled_at = datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc)
@@ -193,11 +219,12 @@ class TestProxyWasAlignedInResolution:
             INSERT INTO signal_ledger
             (signal_id, created_at, model_id, model_claim, model_probability,
              model_timeframe, contract_ticker, proxy_class, confidence_discount,
-             market_yes_price, market_no_price, raw_edge, effective_edge, signal)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             market_yes_price, market_no_price, entry_side, entry_price,
+             raw_edge, effective_edge, signal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [signal_id, now, "test", "claim", 0.7, "7d",
-             "KXALIGN-02", "DIRECT", 1.0, 0.40, 0.60, 0.1, 0.1, "BUY_NO"],
+             "KXALIGN-02", "DIRECT", 1.0, 0.40, 0.60, "no", 0.60, 0.1, 0.1, "BUY_NO"],
         )
 
         settled_at = datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc)
@@ -219,11 +246,12 @@ class TestProxyWasAlignedInResolution:
             INSERT INTO signal_ledger
             (signal_id, created_at, model_id, model_claim, model_probability,
              model_timeframe, contract_ticker, proxy_class, confidence_discount,
-             market_yes_price, market_no_price, raw_edge, effective_edge, signal)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             market_yes_price, market_no_price, entry_side, entry_price,
+             raw_edge, effective_edge, signal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [signal_id, now, "test", "claim", 0.7, "7d",
-             "KXALIGN-03", "DIRECT", 1.0, 0.40, 0.60, 0.1, 0.1, "BUY_YES"],
+             "KXALIGN-03", "DIRECT", 1.0, 0.40, 0.60, "yes", 0.40, 0.1, 0.1, "BUY_YES"],
         )
 
         settled_at = datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc)
