@@ -8,19 +8,21 @@ A prediction market edge-finder for the Iran-Hormuz crisis. Ingests real-world n
 
 Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects (blockade -> flow -> price -> insurance) faster and deeper than headline-scraping bots.
 
-## Current Milestone: v1.2 Evaluation + Deployment Hardening
+## Current Milestone: v1.3 Daily Feedback Loop + Scorecard
 
-**Goal:** The edge-finder is built and Phase 1-2 trust foundations are in place. Next step is proving edge with contract-level P&L, then hardening deployment and API hydration.
+**Goal:** Build automated daily telemetry, scoring, and feedback so the system can measure and improve its own forecasting and trading performance — safely, with statistical rigor.
 
 **Target features:**
-- Contract registry with proxy classification (DIRECT / NEAR_PROXY / LOOSE_PROXY / NONE) per model type
-- Mapping policy replacing heuristic `_map_predictions_to_markets()` with structured proxy-aware decision logic
-- Prediction persistence with full provenance (model claim, reasoning, news context, cascade state)
-- Signal ledger recording every signal with contract mapping, proxy class, market state, and trade decision
-- Resolution polling and calibration reports for feedback-loop analysis
-- Paper trading evaluation at contract level with P&L segmented by proxy class
-- FastAPI endpoint hydration (return real pipeline data, not empty responses)
-- Second thesis expansion (new prediction domains beyond Iran/Hormuz)
+- `runs` table for run-level metadata (pipeline health SLO)
+- `daily_scorecard` table + ETL computing 10-20 metrics across Signal Quality, Execution Quality, Portfolio/Risk, Data Quality, Ops/Runtime
+- `ops_events` table persisting structured alerts from AlertDispatcher
+- `llm_usage` table persisting per-call token/cost data from BudgetTracker
+- Brier score and calibration diagnostics (reliability curves, decomposition)
+- Alert thresholds with safe auto-actions (tighten gates only, never loosen)
+- Minimal dashboard + `/api/scorecard` endpoint
+- Champion/challenger experiment tags across prediction_log, signal_ledger, trade_orders
+- Bounded parameter update engine (min_edge tightening, cost model updates from realized slippage)
+- Sequentially valid inference for online monitoring (always-valid methods)
 
 ## Requirements
 
@@ -39,22 +41,19 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - PaperTradeTracker for paper trade P&L tracking
 - BudgetTracker with $20/day cap, per-model pricing, auto-degrade
 - CLI entry point (`parallax.cli.brief`) running full pipeline: news -> predict -> market -> diverge -> trade
-- FastAPI server with 6 endpoints (latest-run state + persisted paper trades; historical hydration still incomplete)
+- FastAPI server with 6 endpoints
 - Docker Compose for backend
-- Phase 1 completed: contract registry, mapping policy, signal ledger
-- Phase 2 completed: prediction persistence, resolution checker, calibration queries
-- Phase 3 completed: paper trading evaluation, report card, track record injection, recalibration, discount auto-adjustment
-- 241 tests passing
+- Contract registry in DuckDB with proxy classification per model type — Phase 1
+- Mapping policy replacing heuristic ticker matching with structured proxy-aware logic — Phase 1
+- Signal ledger persisting every signal with full provenance — Phase 1
+- Prediction persistence with calibration queries — Phase 2
+- Paper trading evaluation with contract-level P&L by proxy class — Phase 3
+- Truth Social ingestion for POTUS signals — v1.2
+- Signal integrity fixes: cost model, quote staleness guard, Kelly sizing — v1.2
 
 ### Active
 
-- [x] Contract registry in DuckDB with proxy classification per model type — Validated in Phase 1
-- [x] Mapping policy replacing heuristic ticker matching with structured proxy-aware logic — Validated in Phase 1
-- [x] Signal ledger persisting every signal with full provenance — Validated in Phase 1
-- [x] Prediction persistence with calibration queries (Phase 2)
-- [x] Paper trading evaluation with contract-level P&L by proxy class — Validated in Phase 3
-- [ ] Deployment hardening: Docker health checks, API hydration, error handling (Phase 4)
-- [ ] Second thesis expansion beyond Iran/Hormuz (Phase 5)
+(Defined in REQUIREMENTS.md for current milestone)
 
 ### Out of Scope
 
@@ -70,6 +69,8 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - Latency arbitrage (edge is reasoning depth, not speed)
 - Multi-scenario support (other conflicts) for v1 -- Phase 5 handles expansion
 - Historical replay UI (backend supports replay mode but no UI needed)
+- Deployment hardening / API hydration (deferred from v1.2 -- CLI-first, not serving a frontend)
+- Second thesis expansion (deferred from v1.2 -- must prove edge on first thesis before expanding)
 
 ## Context
 
@@ -122,4 +123,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-09 after Phase 3 completion (paper trading evaluation, report card, track record injection, recalibration, discount auto-adjustment)*
+*Last updated: 2026-04-09 after milestone v1.3 start (daily feedback loop + scorecard)*
