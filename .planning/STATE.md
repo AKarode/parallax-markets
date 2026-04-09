@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Daily Feedback Loop + Scorecard
-status: defining_requirements
+status: ready_to_plan
 stopped_at: null
 last_updated: "2026-04-09"
 last_activity: 2026-04-09
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,22 +21,26 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-09)
 
 **Core value:** Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects.
-**Current focus:** Defining requirements for v1.3 Daily Feedback Loop + Scorecard
+**Current focus:** Phase 6 - Telemetry Foundation
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-04-09 — Milestone v1.3 started
+Phase: 6 of 9 (Telemetry Foundation) — first phase of v1.3
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-04-09 — Roadmap created for v1.3 milestone (Phases 6-9)
+
+Progress: [░░░░░░░░░░] 0% (v1.3 scope)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 0 (v1.3)
 - Average duration: -
 - Total execution time: 0 hours
+
+**Prior milestones:** 11 plans across Phases 1-3 shipped in ~2 days
 
 ## Accumulated Context
 
@@ -44,6 +48,7 @@ Last activity: 2026-04-09 — Milestone v1.3 started
 
 - v1.2 Phases 4-5 deferred: Deployment Fixes not critical for CLI-first, Second Thesis blocked on proving edge
 - Daily feedback loop is the priority: run-level telemetry, scorecard ETL, alerting, experiment framework
+- Phase 6 groups parallelizable schema+wiring tasks; Phases 7-9 build sequentially on that foundation
 - GitHub issues #19-#23 track Sprint A work items
 
 ### Pending Todos
@@ -53,6 +58,7 @@ None yet.
 ### Blockers/Concerns
 
 - Ceasefire window: 2 weeks from April 7 — must have feedback loop running before it expires
+- Signal integrity modules (cost model, Kelly sizing, allocator) built but not wired into brief.py yet
 - Low sample sizes for statistical tests — event markets resolve slowly
 - Safe auto-actions only (tighten gates, never loosen without human review)
 

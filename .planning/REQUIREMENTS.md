@@ -101,33 +101,33 @@ Deferred from v1.2. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TEL-01 | TBD | Pending |
-| TEL-02 | TBD | Pending |
-| TEL-03 | TBD | Pending |
-| TEL-04 | TBD | Pending |
-| SCORE-01 | TBD | Pending |
-| SCORE-02 | TBD | Pending |
-| SCORE-03 | TBD | Pending |
-| SCORE-04 | TBD | Pending |
-| SCORE-05 | TBD | Pending |
-| SCORE-06 | TBD | Pending |
-| SCORE-07 | TBD | Pending |
-| ALERT-01 | TBD | Pending |
-| ALERT-02 | TBD | Pending |
-| ALERT-03 | TBD | Pending |
-| ALERT-04 | TBD | Pending |
-| EXP-01 | TBD | Pending |
-| EXP-02 | TBD | Pending |
-| EXP-03 | TBD | Pending |
-| EXP-04 | TBD | Pending |
-| EXP-05 | TBD | Pending |
-| EXP-06 | TBD | Pending |
+| TEL-01 | Phase 6 | Pending |
+| TEL-02 | Phase 6 | Pending |
+| TEL-03 | Phase 6 | Pending |
+| TEL-04 | Phase 7 | Pending |
+| SCORE-01 | Phase 6 | Pending |
+| SCORE-02 | Phase 7 | Pending |
+| SCORE-03 | Phase 7 | Pending |
+| SCORE-04 | Phase 7 | Pending |
+| SCORE-05 | Phase 7 | Pending |
+| SCORE-06 | Phase 7 | Pending |
+| SCORE-07 | Phase 7 | Pending |
+| ALERT-01 | Phase 8 | Pending |
+| ALERT-02 | Phase 8 | Pending |
+| ALERT-03 | Phase 8 | Pending |
+| ALERT-04 | Phase 8 | Pending |
+| EXP-01 | Phase 6 | Pending |
+| EXP-02 | Phase 9 | Pending |
+| EXP-03 | Phase 9 | Pending |
+| EXP-04 | Phase 9 | Pending |
+| EXP-05 | Phase 9 | Pending |
+| EXP-06 | Phase 9 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21
+- Mapped to phases: 21
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after milestone v1.3 definition*
+*Last updated: 2026-04-09 after roadmap creation (Phases 6-9)*
