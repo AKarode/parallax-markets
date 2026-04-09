@@ -558,13 +558,15 @@ def _load_config() -> ScenarioConfig:
 async def _fetch_gdelt_events() -> list[dict]:
     from parallax.ingestion.gdelt_doc import fetch_gdelt_docs
     from parallax.ingestion.google_news import fetch_google_news
+    from parallax.ingestion.truth_social import fetch_truth_social
 
     events = []
     seen: set[str] = set()
     try:
-        google_news, gdelt_events = await asyncio.gather(
+        google_news, gdelt_events, truth_events = await asyncio.gather(
             fetch_google_news(seen_hashes=seen),
             fetch_gdelt_docs(timespan="24h", seen_hashes=seen),
+            fetch_truth_social(seen_hashes=seen),
             return_exceptions=True,
         )
         if isinstance(google_news, list):
@@ -572,6 +574,11 @@ async def _fetch_gdelt_events() -> list[dict]:
             seen.update(event.event_hash for event in google_news)
         if isinstance(gdelt_events, list):
             for event in gdelt_events:
+                if event.event_hash not in seen:
+                    events.append(event)
+                    seen.add(event.event_hash)
+        if isinstance(truth_events, list):
+            for event in truth_events:
                 if event.event_hash not in seen:
                     events.append(event)
                     seen.add(event.event_hash)
