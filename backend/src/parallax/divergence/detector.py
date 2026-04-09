@@ -122,6 +122,7 @@ class DivergenceDetector:
 
             gross_edge_value = 0.0
             net_edge_value = 0.0
+            sign = 1.0
 
             if not candidates:
                 tradeability_status = "non_tradable"
