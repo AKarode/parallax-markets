@@ -414,6 +414,35 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS runs (
+            run_id VARCHAR PRIMARY KEY,
+            started_at TIMESTAMPTZ NOT NULL,
+            ended_at TIMESTAMPTZ,
+            status VARCHAR NOT NULL DEFAULT 'running',
+            data_environment VARCHAR NOT NULL DEFAULT 'live',
+            execution_environment VARCHAR NOT NULL DEFAULT 'none',
+            git_sha VARCHAR,
+            error TEXT,
+            config_hash VARCHAR,
+            predictions_count INTEGER DEFAULT 0,
+            signals_count INTEGER DEFAULT 0,
+            trades_count INTEGER DEFAULT 0
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_scorecard (
+            score_date DATE NOT NULL,
+            metric_name VARCHAR NOT NULL,
+            metric_value DOUBLE,
+            dimensions JSON,
+            computed_at TIMESTAMPTZ DEFAULT current_timestamp,
+            run_id VARCHAR,
+            PRIMARY KEY (score_date, metric_name)
+        )
+    """)
+
 
 def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
     if _table_exists(conn, "prediction_log"):

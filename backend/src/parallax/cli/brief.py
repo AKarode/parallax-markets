@@ -38,6 +38,49 @@ logger = logging.getLogger(__name__)
 SCENARIO_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "config" / "scenario_hormuz.yaml"
 
 
+def _persist_run_start(
+    conn: duckdb.DuckDBPyConnection,
+    run_id: str,
+    runtime,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO runs (run_id, started_at, status, data_environment, execution_environment)
+        VALUES (?, ?, 'running', ?, ?)
+        """,
+        [run_id, datetime.now(timezone.utc), runtime.data_environment, runtime.execution_environment],
+    )
+
+
+def _persist_run_end(
+    conn: duckdb.DuckDBPyConnection,
+    run_id: str,
+    *,
+    status: str = "completed",
+    error: str | None = None,
+    predictions_count: int = 0,
+    signals_count: int = 0,
+    trades_count: int = 0,
+) -> None:
+    conn.execute(
+        """
+        UPDATE runs
+        SET ended_at = ?, status = ?, error = ?,
+            predictions_count = ?, signals_count = ?, trades_count = ?
+        WHERE run_id = ?
+        """,
+        [
+            datetime.now(timezone.utc),
+            status,
+            error,
+            predictions_count,
+            signals_count,
+            trades_count,
+            run_id,
+        ],
+    )
+
+
 def _make_dry_run_predictions() -> list[PredictionOutput]:
     now = datetime.now(timezone.utc)
     return [
@@ -350,8 +393,10 @@ async def run_brief(
     runtime = resolve_runtime_config(dry_run=dry_run)
     conn = duckdb.connect(runtime.db_path)
     create_tables(conn)
+    _persist_run_start(conn, run_id, runtime)
     logger.info(
-        "Running brief (data_environment=%s execution_environment=%s db=%s)",
+        "Running brief (run_id=%s data_environment=%s execution_environment=%s db=%s)",
+        run_id,
         runtime.data_environment,
         runtime.execution_environment,
         runtime.db_path,
@@ -479,12 +524,20 @@ async def run_brief(
             run_id,
             predictions,
             refreshed_signals,
-            runtime,
-            trade_journal,
+            runtime=runtime,
+            trade_journal=trade_journal,
             divergence_count=len(refreshed_signals),
             log_dir=log_dir,
         )
 
+    _persist_run_end(
+        conn,
+        run_id,
+        status="completed",
+        predictions_count=len(predictions),
+        signals_count=len(all_signals),
+        trades_count=len(trade_journal),
+    )
     conn.close()
     return brief
 
