@@ -96,11 +96,25 @@ If `ProposedTrade.edge` is None, the allocator uses `default_order_size` (10). T
 - 38 new tests covering all four fixes
 - All TDD: tests written first, confirmed failing, then implementation
 
-**What's not yet wired up:**
-- `CostModel` not yet instantiated in `brief.py` pipeline (detector still uses no cost model in production path)
-- `max_quote_age_seconds` not yet passed to detector in `brief.py`
-- Kelly sizing not yet fed edge values from the signal evaluation path
-- These are wiring tasks, not logic tasks — the modules are ready
+**All modules wired into production path** (see wiring section below).
+
+## Wiring into Production Path
+
+After building the modules, wired everything into `brief.py`:
+
+### What was wired
+
+- **Kalshi taker fee** — `MappingCostInputs(expected_fee_rate=0.07)` passed to `MappingPolicy`. Also updated `MappingCostInputs.expected_fee_rate` default from 0.01 to 0.07 in `contracts/schemas.py`.
+- **Staleness guard** — already built into `MappingPolicy.evaluate()` (the production path), which checks quote age before computing edge. The `DivergenceDetector` staleness guard is for standalone/direct detection use.
+- **Kelly sizing** — `PortfolioAllocator` instantiated with `load_risk_limits()` in `run_brief()`. Trade execution loop now builds `ProposedTrade` with `edge=signal.effective_edge` and passes through allocator for Kelly sizing + risk cap enforcement. Falls back to `default_order_size` when edge/entry_price unavailable.
+
+### Discovery: MappingPolicy already had cost + staleness handling
+
+The `DivergenceDetector` cost model and staleness guard (P1/P2) are useful for standalone detection, but the production brief pipeline uses `MappingPolicy.evaluate()` which already had its own `MappingCostInputs` and staleness checking. The key fix was updating the fee default from 0.01 (placeholder) to 0.07 (real Kalshi taker fee).
+
+### Dry-run mock data adjusted
+
+The higher fee threshold (8.5% total cost = 7% fee + 1.5% half-spread) correctly blocked all mock signals that had marginal edges. Updated mock predictions and market prices to represent realistic divergence scenarios with clear post-cost edge, so the dry-run test still validates the full pipeline.
 
 ## Commits
 
@@ -111,11 +125,12 @@ If `ProposedTrade.edge` is None, the allocator uses `default_order_size` (10). T
 | `e384022` | feat(portfolio): add quarter-Kelly position sizing + feat(costs): fee model + detector integration |
 | `cc53de4` | feat(detector): add quote staleness guard to reject stale market snapshots |
 | `57862b9` | fix(detector): initialize sign variable to satisfy static analysis |
+| `5cf5aae` | docs: session log and README update for signal integrity fixes |
+| `2128dfb` | feat(brief): wire cost model, Kelly sizing, and allocator into production path |
 
 ## Next Steps
 
-1. **Wire cost model into brief.py** — instantiate `CostModel()` and pass to `DivergenceDetector` in `run_brief()`
-2. **Wire staleness guard** — pass `max_quote_age_seconds=120` to detector in `run_brief()`
-3. **Wire Kelly sizing** — propagate net edge from signal evaluation into `ProposedTrade.edge` before calling allocator
-4. **Run 30 days of paper trades** — validate calibration with the `scoring/calibration.py` infrastructure
-5. **Raise min_edge_pct** — with cost model in place, the 5% threshold is now post-cost. Consider whether 5% net is still appropriate or should be higher given model uncertainty.
+1. **Run 30 days of paper trades** — validate calibration with the `scoring/calibration.py` infrastructure
+2. **Raise min_edge_pct** — with cost model in place, the 5% threshold is now post-cost. Consider whether 5% net is still appropriate or should be higher given model uncertainty.
+3. **Load portfolio state from DB** — the allocator currently gets an empty `PortfolioState()`. Wire it to load open positions/orders from DuckDB for cumulative risk tracking across runs.
+4. **Background fill reconciliation** — `poll_resting_orders()` exists but isn't called on a schedule.
