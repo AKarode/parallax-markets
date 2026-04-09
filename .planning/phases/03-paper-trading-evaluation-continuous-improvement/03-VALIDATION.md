@@ -39,7 +39,7 @@ created: 2026-04-08
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | Status |
 |---------|------|------|-------------|-----------|-------------------|--------|
 | 03-01-01 | 01 | 1 | TRAD-04 | integration | `crontab -l \| grep parallax` | ⬜ pending |
-| 03-01-02 | 01 | 1 | TRAD-04 | unit | `python -m pytest tests/test_brief_scheduled.py -x` | ⬜ pending |
+| 03-01-02 | 01 | 1 | TRAD-04 | unit | `python -m pytest tests/test_brief.py -x` | ⬜ pending |
 | 03-02-01 | 02 | 2 | TRAD-01, TRAD-02 | unit | `python -m pytest tests/test_report_card.py -x` | ⬜ pending |
 | 03-02-02 | 02 | 2 | TRAD-03 | integration | `streamlit run backend/src/parallax/dashboard/app.py --server.headless true` | ⬜ pending |
 | 03-03-01 | 03 | 3 | TRAD-05 | unit | `python -m pytest tests/test_track_record.py -x` | ⬜ pending |

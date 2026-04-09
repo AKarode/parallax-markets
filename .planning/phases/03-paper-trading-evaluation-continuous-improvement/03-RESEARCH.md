@@ -449,22 +449,22 @@ def main():
 | A3 | 300 tokens for track record is small enough to not impact LLM reasoning quality | Pattern 2 | Longer context could dilute signal; shorter might not give enough history |
 | A4 | WSL2 cron service auto-starts reliably with /etc/wsl.conf boot command | Pitfall 4 | May need a manual `sudo service cron start` after WSL restart |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Per-model calibration_curve() filtering**
    - What we know: Current `calibration_curve()` is global (all models). D-16 needs per-model recalibration.
    - What's unclear: Whether to add `model_id` parameter to existing functions or create new per-model variants.
-   - Recommendation: Add optional `model_id` parameter to `calibration_curve()`. Filter with `AND model_id = ?` when provided. Backward compatible.
+   - RESOLVED: Add optional `model_id` parameter to `calibration_curve()`. Filter with `AND model_id = ?` when provided. Backward compatible.
 
 2. **raw_probability storage location (Claude's discretion)**
    - What we know: D-16 requires storing both raw and calibrated probability.
    - What's unclear: Whether to add `raw_probability` to signal_ledger or prediction_log.
-   - Recommendation: Add `raw_probability` column to signal_ledger (it's where `model_probability` lives and where recalibration matters for edge calculation). Rename nothing -- `model_probability` becomes the calibrated value, `raw_probability` stores the LLM output.
+   - RESOLVED: Add `raw_probability` column to signal_ledger (it's where `model_probability` lives and where recalibration matters for edge calculation). Rename nothing -- `model_probability` becomes the calibrated value, `raw_probability` stores the LLM output.
 
 3. **Proxy alignment definition**
    - What we know: D-09 says populate `proxy_was_aligned` during resolution.
    - What's unclear: Exact semantics for NEAR_PROXY and LOOSE_PROXY contracts.
-   - Recommendation: Define as "did the contract resolve in the direction the signal predicted?" independent of model correctness. BUY_YES + resolution_price > 0.5 = aligned. BUY_NO + resolution_price <= 0.5 = aligned.
+   - RESOLVED: Define as "did the contract resolve in the direction the signal predicted?" independent of model correctness. BUY_YES + resolution_price > 0.5 = aligned. BUY_NO + resolution_price <= 0.5 = aligned.
 
 ## Environment Availability
 
