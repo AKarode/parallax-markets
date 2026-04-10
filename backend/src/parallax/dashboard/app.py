@@ -9,13 +9,19 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 
 import duckdb
 import plotly.graph_objects as go
 import streamlit as st
 
-from parallax.dashboard.data import get_latest_brief, get_signal_history
+from parallax.dashboard.data import (
+    get_calibration_data,
+    get_latest_brief,
+    get_signal_history,
+    get_trade_journal,
+)
 
 # ── Palette ──────────────────────────────────────────────
 BG = "#09090b"
@@ -53,13 +59,14 @@ def _css() -> None:
         --bg: #09090b; --surface: #111113; --border: #1c1c1f;
         --muted: #52525b; --subtle: #71717a; --text: #e4e4e7; --white: #fafafa;
         --green: #22c55e; --red: #ef4444; --indigo: #818cf8; --purple: #a78bfa; --cyan: #22d3ee;
+        --amber: #f59e0b;
     }
 
     #MainMenu, footer, header, div[data-testid="stDecoration"],
     div[data-testid="stToolbar"] { display:none!important; }
 
     .stApp { background: var(--bg); color: var(--text); }
-    .block-container { padding: 1.2rem 2rem 2rem; max-width: 1200px; }
+    .block-container { padding: 1.2rem 2rem 2rem; max-width: 1400px; }
 
     /* ── Header ── */
     .hdr { display:flex; align-items:baseline; gap:0.75rem; margin-bottom:0.15rem; }
@@ -113,7 +120,25 @@ def _css() -> None:
         color:#3f3f46; line-height:1.35; margin-top:0.3rem;
         display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
     }
-    .cg { color:var(--green); } .cr { color:var(--red); } .ci { color:var(--indigo); }
+    .cg { color:var(--green); } .cr { color:var(--red); } .ci { color:var(--indigo); } .ca { color:var(--amber); }
+
+    /* ── KPI tiles ── */
+    .kpi-row { display:flex; gap:0.4rem; margin-bottom:0.15rem; }
+    .kpi {
+        flex:1; background:var(--surface); border:1px solid var(--border);
+        border-radius:8px; padding:0.5rem 0.6rem; text-align:center; position:relative;
+    }
+    .kpi-v {
+        font-family:'Instrument Sans',sans-serif; font-size:1.15rem;
+        font-weight:700; color:var(--white);
+    }
+    .kpi-l {
+        font-family:'JetBrains Mono',monospace; font-size:0.5rem;
+        letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-top:0.1rem;
+    }
+    .kpi-alert { border-color: rgba(239,68,68,0.4); }
+    .kpi-warn { border-color: rgba(245,158,11,0.3); }
+    .kpi-ok { border-color: rgba(34,197,94,0.2); }
 
     /* ── Stat pills ── */
     .stats { display:flex; gap:0.4rem; margin-bottom:0.15rem; }
@@ -165,6 +190,27 @@ def _css() -> None:
     .px-n { background:rgba(167,139,250,0.1); color:var(--purple); }
     .px-l { background:rgba(113,113,122,0.08); color:var(--muted); }
 
+    /* ── Funnel ── */
+    .funnel { display:flex; gap:0.3rem; align-items:end; }
+    .funnel-bar {
+        flex:1; background:var(--surface); border:1px solid var(--border);
+        border-radius:6px; text-align:center; padding:0.3rem 0.2rem;
+        font-family:'JetBrains Mono',monospace; font-size:0.6rem;
+        position:relative; overflow:hidden;
+    }
+    .funnel-bar .fb-fill {
+        position:absolute; bottom:0; left:0; right:0;
+        border-radius:0 0 5px 5px; opacity:0.15;
+    }
+    .funnel-bar .fb-v {
+        font-family:'Instrument Sans',sans-serif; font-size:1rem;
+        font-weight:700; color:var(--white); position:relative;
+    }
+    .funnel-bar .fb-l {
+        font-size:0.45rem; letter-spacing:0.08em; text-transform:uppercase;
+        color:var(--muted); position:relative;
+    }
+
     /* ── Divider ── */
     .div { border:none; border-top:1px solid var(--border); margin:0.8rem 0; }
 
@@ -178,6 +224,15 @@ def _css() -> None:
     .fd-m { background:var(--muted); }
 
     div[data-testid="column"] { padding: 0 0.3rem; }
+
+    /* ── Tabs ── */
+    .stTabs [data-baseweb="tab-list"] { gap: 0; border-bottom: 1px solid var(--border); }
+    .stTabs [data-baseweb="tab"] {
+        font-family:'JetBrains Mono',monospace; font-size:0.65rem;
+        letter-spacing:0.06em; text-transform:uppercase; color:var(--muted);
+        padding: 0.5rem 1rem; border: none; background: transparent;
+    }
+    .stTabs [aria-selected="true"] { color:var(--white); border-bottom: 2px solid var(--indigo); }
     </style>""", unsafe_allow_html=True)
 
 
@@ -193,6 +248,31 @@ def _proxy(pc: str) -> str:
     if p == "direct": return '<span class="px px-d">DIRECT</span>'
     if p == "near_proxy": return '<span class="px px-n">NEAR</span>'
     return '<span class="px px-l">LOOSE</span>'
+
+
+def _kpi_class(value: float | None, good_below: float | None = None, bad_above: float | None = None) -> str:
+    if value is None:
+        return "kpi"
+    if bad_above is not None and value > bad_above:
+        return "kpi kpi-alert"
+    if good_below is not None and value < good_below:
+        return "kpi kpi-ok"
+    return "kpi kpi-warn"
+
+
+def _fmt_pct(v: float | None) -> str:
+    if v is None: return "--"
+    return f"{v:.0%}"
+
+
+def _fmt_dec(v: float | None, decimals: int = 3) -> str:
+    if v is None: return "--"
+    return f"{v:.{decimals}f}"
+
+
+def _fmt_usd(v: float | None) -> str:
+    if v is None: return "--"
+    return f"${v:+.2f}" if v != 0 else "$0.00"
 
 
 # ── Queries ──────────────────────────────────────────────
@@ -225,10 +305,7 @@ def _edges(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 
 
 def _ticker_info(conn: duckdb.DuckDBPyConnection) -> dict[str, str]:
-    """Map ticker -> short human description from contract registry."""
-    rows = conn.execute("""
-        SELECT ticker, resolution_criteria FROM contract_registry
-    """).fetchall()
+    rows = conn.execute("SELECT ticker, resolution_criteria FROM contract_registry").fetchall()
     return {r[0]: (r[1] or "")[:60] for r in rows}
 
 
@@ -240,30 +317,46 @@ def _history(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     return [{"m": r[0], "p": float(r[1]), "d": r[2], "t": r[3]} for r in rows]
 
 
-# ── Main ─────────────────────────────────────────────────
+def _scorecard_metrics(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
+    rows = conn.execute("""
+        SELECT metric_name, metric_value, dimensions
+        FROM daily_scorecard
+        WHERE score_date = (SELECT MAX(score_date) FROM daily_scorecard)
+    """).fetchall()
+    return {
+        r[0]: {"value": r[1], "dims": json.loads(r[2]) if r[2] else None}
+        for r in rows
+    }
 
-def main() -> None:
-    st.set_page_config(page_title="Parallax", layout="wide", initial_sidebar_state="collapsed")
-    _css()
 
-    db_path = os.environ.get("DUCKDB_PATH", "data/parallax.duckdb")
-    try:
-        conn = duckdb.connect(db_path, read_only=True)
-    except Exception as e:
-        st.markdown(f'<div style="color:{RED};padding:2rem;">Cannot connect: {e}</div>', unsafe_allow_html=True)
-        return
+def _scorecard_timeseries(conn: duckdb.DuckDBPyConnection, metric_name: str) -> list[dict]:
+    rows = conn.execute("""
+        SELECT score_date, metric_value
+        FROM daily_scorecard
+        WHERE metric_name = ?
+        ORDER BY score_date
+    """, [metric_name]).fetchall()
+    return [{"date": str(r[0]), "value": r[1]} for r in rows]
 
-    brief = get_latest_brief(conn)
-    stats = _summary(conn)
-    signals = get_signal_history(conn)
-    tinfo = _ticker_info(conn)
 
-    # ── Header ──
-    st.markdown(f"""
-    <div class="hdr"><span class="hdr-title">Parallax</span><span class="hdr-live">Live</span></div>
-    <div class="hdr-sub">prediction market edge-finder &mdash; iran-hormuz crisis</div>
-    """, unsafe_allow_html=True)
+def _order_funnel(conn: duckdb.DuckDBPyConnection) -> dict:
+    r = conn.execute("""
+        SELECT
+            COUNT(*) AS attempted,
+            SUM(CASE WHEN status NOT IN ('rejected', 'error') THEN 1 ELSE 0 END) AS accepted,
+            SUM(CASE WHEN status IN ('filled', 'partially_filled') THEN 1 ELSE 0 END) AS filled
+        FROM trade_orders
+    """).fetchone()
+    return {
+        "attempted": r[0] or 0,
+        "accepted": r[1] or 0,
+        "filled": r[2] or 0,
+    }
 
+
+# ── Tab: Overview ────────────────────────────────────────
+
+def _tab_overview(conn, brief, stats, signals, tinfo):
     # ── Predictions (horizontal strip) ──
     if brief:
         cards = ""
@@ -296,7 +389,6 @@ def main() -> None:
 
     st.markdown('<hr class="div">', unsafe_allow_html=True)
 
-    # ── Signal Ledger + Edge Chart ──
     col_l, col_r = st.columns([1.4, 1])
 
     with col_l:
@@ -321,7 +413,6 @@ def main() -> None:
                 </div>""", unsafe_allow_html=True)
 
     with col_r:
-        # ── Edge waterfall chart ──
         st.markdown('<div class="lbl">Edge Analysis</div>', unsafe_allow_html=True)
         edges = _edges(conn)
         if edges:
@@ -346,7 +437,6 @@ def main() -> None:
             fig.add_vline(x=-5, line_dash="dot", line_color="rgba(239,68,68,0.15)")
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        # ── Prediction timeline ──
         hist = _history(conn)
         if hist and len(hist) > 1:
             st.markdown('<div class="lbl" style="margin-top:0.3rem;">Prediction Timeline</div>', unsafe_allow_html=True)
@@ -367,9 +457,263 @@ def main() -> None:
                                yaxis=dict(**_AX, range=[0, 100], title="Prob %", title_font_size=9))
             st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
+
+# ── Tab: Scorecard ───────────────────────────────────────
+
+def _tab_scorecard(conn):
+    metrics = _scorecard_metrics(conn)
+
+    if not metrics:
+        st.markdown(
+            '<div style="color:#52525b;padding:2rem;text-align:center;">'
+            'No scorecard data yet. Run <code>parallax brief --scorecard</code> first.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ── KPI Tiles ──
+    brier = metrics.get("signal_brier_score", {}).get("value")
+    hit = metrics.get("signal_hit_rate", {}).get("value")
+    pnl = metrics.get("risk_daily_realized_pnl", {}).get("value")
+    fill = metrics.get("exec_fill_rate", {}).get("value")
+    runs = metrics.get("ops_run_count", {}).get("value")
+    stale = metrics.get("data_quote_staleness_rate", {}).get("value")
+
+    brier_cls = _kpi_class(brier, good_below=0.22, bad_above=0.35)
+    hit_cls = _kpi_class(hit, good_below=None, bad_above=None)
+    if hit is not None:
+        hit_cls = "kpi kpi-ok" if hit > 0.55 else ("kpi kpi-alert" if hit < 0.40 else "kpi kpi-warn")
+    pnl_cls = "kpi kpi-ok" if pnl and pnl > 0 else ("kpi kpi-alert" if pnl and pnl < -10 else "kpi")
+    stale_cls = _kpi_class(stale, good_below=0.10, bad_above=0.50)
+
+    st.markdown(f"""<div class="kpi-row">
+        <div class="{brier_cls}"><div class="kpi-v">{_fmt_dec(brier)}</div><div class="kpi-l">Brier Score</div></div>
+        <div class="{hit_cls}"><div class="kpi-v">{_fmt_pct(hit)}</div><div class="kpi-l">Hit Rate</div></div>
+        <div class="{pnl_cls}"><div class="kpi-v">{_fmt_usd(pnl)}</div><div class="kpi-l">Daily PnL</div></div>
+        <div class="kpi"><div class="kpi-v">{_fmt_pct(fill)}</div><div class="kpi-l">Fill Rate</div></div>
+        <div class="kpi"><div class="kpi-v">{int(runs) if runs else '--'}</div><div class="kpi-l">Runs Today</div></div>
+        <div class="{stale_cls}"><div class="kpi-v">{_fmt_pct(stale)}</div><div class="kpi-l">Stale Quotes</div></div>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown('<hr class="div">', unsafe_allow_html=True)
+
+    col_l, col_r = st.columns([1, 1])
+
+    with col_l:
+        # ── Brier Score Timeseries ──
+        st.markdown('<div class="lbl">Brier Score Over Time</div>', unsafe_allow_html=True)
+        ts = _scorecard_timeseries(conn, "signal_brier_score")
+        if ts and any(t["value"] is not None for t in ts):
+            fig = go.Figure()
+            dates = [t["date"] for t in ts if t["value"] is not None]
+            values = [t["value"] for t in ts if t["value"] is not None]
+            fig.add_trace(go.Scatter(
+                x=dates, y=values, mode="lines+markers",
+                line=dict(color=INDIGO, width=2), marker=dict(size=6, color=INDIGO),
+                hovertemplate="Date: %{x}<br>Brier: %{y:.3f}<extra></extra>",
+            ))
+            fig.add_hline(y=0.25, line_dash="dot", line_color="rgba(239,68,68,0.3)",
+                          annotation_text="random", annotation_font_color=MUTED, annotation_font_size=9)
+            fig.add_hline(y=0.22, line_dash="dot", line_color="rgba(34,197,94,0.3)",
+                          annotation_text="target", annotation_font_color=MUTED, annotation_font_size=9)
+            fig.update_layout(**_PL, height=220,
+                              xaxis=dict(**_AX), yaxis=dict(**_AX, title="Brier", title_font_size=9))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.markdown('<div style="color:#3f3f46;padding:1rem;text-align:center;font-size:0.75rem;">Need 2+ days of data</div>', unsafe_allow_html=True)
+
+        # ── Reliability Diagram ──
+        st.markdown('<div class="lbl">Calibration (Reliability Diagram)</div>', unsafe_allow_html=True)
+        cal = get_calibration_data(conn)
+        curve = cal.get("calibration_curve", [])
+        if curve:
+            fig = go.Figure()
+            buckets = [str(c['bucket']) for c in curve]
+            predicted = [c["avg_predicted"] for c in curve]
+            actual = [c["actual_rate"] for c in curve]
+            fig.add_trace(go.Bar(
+                x=buckets, y=predicted, name="Predicted",
+                marker_color=INDIGO, opacity=0.6,
+            ))
+            fig.add_trace(go.Bar(
+                x=buckets, y=actual, name="Actual",
+                marker_color=GREEN, opacity=0.8,
+            ))
+            # Perfect calibration line: midpoint of each bucket
+            midpoints = []
+            for b in buckets:
+                try:
+                    lo = float(b.split("-")[0].strip("%")) / 100
+                    hi = float(b.split("-")[1].strip("%")) / 100
+                    midpoints.append((lo + hi) / 2)
+                except (ValueError, IndexError):
+                    midpoints.append(None)
+            if any(m is not None for m in midpoints):
+                fig.add_trace(go.Scatter(
+                    x=buckets, y=midpoints,
+                    mode="lines", name="Perfect",
+                    line=dict(color=MUTED, dash="dot", width=1),
+                ))
+            fig.update_layout(**_PL, barmode="group", height=200,
+                              xaxis=dict(**_AX, title="Probability Bucket", title_font_size=9),
+                              yaxis=dict(**_AX, title="Rate", title_font_size=9, range=[0, 1]))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.markdown('<div style="color:#3f3f46;padding:1rem;text-align:center;font-size:0.75rem;">Need resolved signals for calibration</div>', unsafe_allow_html=True)
+
+    with col_r:
+        # ── Order Funnel ──
+        st.markdown('<div class="lbl">Order Funnel</div>', unsafe_allow_html=True)
+        funnel = _order_funnel(conn)
+        att, acc, fil = funnel["attempted"], funnel["accepted"], funnel["filled"]
+        max_val = max(att, 1)
+        att_h = 100
+        acc_h = int((acc / max_val) * 100) if max_val > 0 else 0
+        fil_h = int((fil / max_val) * 100) if max_val > 0 else 0
+
+        st.markdown(f"""<div class="funnel">
+            <div class="funnel-bar">
+                <div class="fb-fill" style="height:{att_h}%;background:{INDIGO};"></div>
+                <div class="fb-v">{att}</div><div class="fb-l">Attempted</div>
+            </div>
+            <div class="funnel-bar">
+                <div class="fb-fill" style="height:{acc_h}%;background:{PURPLE};"></div>
+                <div class="fb-v">{acc}</div><div class="fb-l">Accepted</div>
+            </div>
+            <div class="funnel-bar">
+                <div class="fb-fill" style="height:{fil_h}%;background:{GREEN};"></div>
+                <div class="fb-v">{fil}</div><div class="fb-l">Filled</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+        # ── Tradeability Funnel ──
+        st.markdown('<div class="lbl" style="margin-top:1rem;">Signal Tradeability</div>', unsafe_allow_html=True)
+        funnel_metric = metrics.get("signal_tradeability_funnel", {})
+        dims = funnel_metric.get("dims")
+        if dims:
+            labels = list(dims.keys())
+            values = list(dims.values())
+            colors = {
+                "tradable": GREEN, "tradeable": GREEN,
+                "edge_blocked": AMBER,
+                "non_tradable": RED, "degraded": AMBER,
+                "below_min_edge": MUTED,
+            }
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=values, y=labels, orientation="h",
+                marker_color=[colors.get(l, SUBTLE) for l in labels],
+                hovertemplate="%{y}: %{x}<extra></extra>",
+            ))
+            fig.update_layout(**_PL, height=150,
+                              xaxis=dict(**_AX, title="Count", title_font_size=9),
+                              yaxis=dict(**_AX))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Hit Rate by Proxy Class ──
+        st.markdown('<div class="lbl" style="margin-top:1rem;">Hit Rate by Proxy</div>', unsafe_allow_html=True)
+        cal = get_calibration_data(conn)
+        hr = cal.get("hit_rate", [])
+        if hr:
+            fig = go.Figure()
+            pc_colors = {"DIRECT": INDIGO, "NEAR_PROXY": PURPLE, "LOOSE_PROXY": MUTED}
+            fig.add_trace(go.Bar(
+                x=[h["proxy_class"] for h in hr],
+                y=[h["hit_rate"] for h in hr],
+                marker_color=[pc_colors.get(h["proxy_class"], SUBTLE) for h in hr],
+                text=[f"{h['hit_rate']:.0%} (n={h['total']})" for h in hr],
+                textposition="outside",
+                textfont=dict(size=9, color=TEXT),
+                hovertemplate="%{x}<br>Hit rate: %{y:.0%}<extra></extra>",
+            ))
+            fig.add_hline(y=0.5, line_dash="dot", line_color="rgba(113,113,122,0.3)")
+            fig.update_layout(**_PL, height=200,
+                              xaxis=dict(**_AX), yaxis=dict(**_AX, range=[0, 1], title="Hit Rate", title_font_size=9))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.markdown('<div style="color:#3f3f46;padding:1rem;text-align:center;font-size:0.75rem;">Need resolved signals</div>', unsafe_allow_html=True)
+
+
+# ── Tab: Trades ──────────────────────────────────────────
+
+def _tab_trades(conn):
+    journal = get_trade_journal(conn)
+    if not journal:
+        st.markdown(
+            '<div style="color:#52525b;padding:2rem;text-align:center;">No trade orders yet.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown('<div class="lbl">Trade Journal</div>', unsafe_allow_html=True)
+    st.markdown("""<div class="s-hdr">
+        <span style="flex:2">Ticker</span><span style="flex:0.5">Side</span>
+        <span style="flex:0.5">Qty</span><span style="flex:0.8">Limit</span>
+        <span style="flex:0.8">Fill</span><span style="flex:0.8">Status</span>
+        <span style="flex:0.8;text-align:right">PnL</span>
+    </div>""", unsafe_allow_html=True)
+
+    for t in journal[:20]:
+        side_cls = "cg" if t["side"] == "YES" else "cr"
+        limit_str = f"{t['intended_price']:.0%}" if t["intended_price"] else "--"
+        fill_str = f"{t['avg_fill_price']:.0%}" if t["avg_fill_price"] else "--"
+        pnl_str = ""
+        pnl_cls = ""
+        if t["realized_pnl"] is not None:
+            pnl_str = f"${t['realized_pnl']:+.2f}"
+            pnl_cls = "cg" if t["realized_pnl"] > 0 else "cr"
+        status = t["order_status"] or "--"
+
+        st.markdown(f"""<div class="s-row">
+            <span class="s-tk" style="flex:2"><span>{t['ticker']}</span></span>
+            <span class="{side_cls}" style="flex:0.5;font-family:'JetBrains Mono',monospace;font-size:0.7rem;">{t['side']}</span>
+            <span style="flex:0.5;font-size:0.75rem;">{t['quantity']}</span>
+            <span style="flex:0.8;font-family:'JetBrains Mono',monospace;font-size:0.7rem;">{limit_str}</span>
+            <span style="flex:0.8;font-family:'JetBrains Mono',monospace;font-size:0.7rem;">{fill_str}</span>
+            <span style="flex:0.8;font-size:0.7rem;">{status}</span>
+            <span class="s-eg {pnl_cls}" style="flex:0.8">{pnl_str}</span>
+        </div>""", unsafe_allow_html=True)
+
+
+# ── Main ─────────────────────────────────────────────────
+
+def main() -> None:
+    st.set_page_config(page_title="Parallax", layout="wide", initial_sidebar_state="collapsed")
+    _css()
+
+    db_path = os.environ.get("DUCKDB_PATH", "data/parallax.duckdb")
+    try:
+        conn = duckdb.connect(db_path, read_only=True)
+    except Exception as e:
+        st.markdown(f'<div style="color:{RED};padding:2rem;">Cannot connect: {e}</div>', unsafe_allow_html=True)
+        return
+
+    brief = get_latest_brief(conn)
+    stats = _summary(conn)
+    signals = get_signal_history(conn)
+    tinfo = _ticker_info(conn)
+
+    # ── Header ──
+    st.markdown(f"""
+    <div class="hdr"><span class="hdr-title">Parallax</span><span class="hdr-live">Live</span></div>
+    <div class="hdr-sub">prediction market edge-finder &mdash; iran-hormuz crisis</div>
+    """, unsafe_allow_html=True)
+
+    # ── Tabs ──
+    tab_overview, tab_scorecard, tab_trades = st.tabs(["Overview", "Scorecard", "Trades"])
+
+    with tab_overview:
+        _tab_overview(conn, brief, stats, signals, tinfo)
+
+    with tab_scorecard:
+        _tab_scorecard(conn)
+
+    with tab_trades:
+        _tab_trades(conn)
+
     # ── Footer ──
     st.markdown('<hr class="div">', unsafe_allow_html=True)
-    last_run = brief[0]["created_at"] if brief else "—"
+    last_run = brief[0]["created_at"] if brief else "--"
     sig_n = len(signals) if signals else 0
     st.markdown(f"""<div class="foot">
         <span><span class="foot-dot fd-g"></span>{len(brief) if brief else 0} models active</span>
