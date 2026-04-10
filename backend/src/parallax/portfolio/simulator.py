@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any
 
 import duckdb
@@ -51,7 +51,7 @@ class PortfolioSimulator:
         # Group signals by run_id, preserving chronological order
         runs = self._group_by_run(signals)
 
-        for run_id, run_signals in runs:
+        for _run_id, run_signals in runs:
             # Aggregate signals per contract using weighted ensemble
             aggregated = self._aggregate_signals(run_signals, hit_rates)
 
@@ -71,7 +71,7 @@ class PortfolioSimulator:
                 if ticker in positions and resolution_price is not None:
                     pos = positions.pop(ticker)
                     payout = self._compute_payout(
-                        pos["side"], pos["quantity"], pos["entry_price"], resolution_price,
+                        pos["side"], pos["quantity"], resolution_price,
                     )
                     fees = pos["quantity"] * entry_price * FEE_RATE
                     total_fees += fees
@@ -157,8 +157,9 @@ class PortfolioSimulator:
             peak_value = max(peak_value, portfolio_val)
 
         # Settle any remaining positions with resolution data
-        self._settle_remaining(positions, closed_trades, cash, total_fees)
-        cash = self._recalculate_cash(closed_trades, positions, total_fees)
+        settle_cash, settle_fees = self._settle_remaining(positions, closed_trades)
+        cash += settle_cash
+        total_fees += settle_fees
 
         # Update mark-to-market from latest market_prices
         self._update_mark_to_market(positions)
@@ -354,7 +355,6 @@ class PortfolioSimulator:
         self,
         side: str,
         quantity: int,
-        entry_price: float,
         resolution_price: float,
     ) -> float:
         """Binary contract settlement payout."""
@@ -381,10 +381,13 @@ class PortfolioSimulator:
         self,
         positions: dict[str, dict[str, Any]],
         closed_trades: list[dict[str, Any]],
-        cash: float,
-        total_fees: float,
-    ) -> None:
-        """Settle positions that have resolution data in signal_ledger."""
+    ) -> tuple[float, float]:
+        """Settle positions that have resolution data in signal_ledger.
+
+        Returns (cash_delta, fees_delta) to add to the caller's running totals.
+        """
+        cash_delta = 0.0
+        fees_delta = 0.0
         resolved_tickers = []
         for ticker, pos in positions.items():
             row = self._conn.execute(
@@ -401,10 +404,14 @@ class PortfolioSimulator:
             if row and row[0] is not None:
                 resolution_price = row[0]
                 payout = self._compute_payout(
-                    pos["side"], pos["quantity"], pos["entry_price"], resolution_price,
+                    pos["side"], pos["quantity"], resolution_price,
                 )
                 fees = pos["quantity"] * pos["entry_price"] * FEE_RATE
                 pnl = payout - fees
+                # Return entry capital via payout (settlement replaces position)
+                cash_delta += payout - fees
+                fees_delta += fees
+                entry_notional = pos["quantity"] * pos["entry_price"]
                 closed_trades.append({
                     "ticker": ticker,
                     "side": pos["side"],
@@ -412,7 +419,7 @@ class PortfolioSimulator:
                     "entry_price": pos["entry_price"],
                     "exit_price": resolution_price,
                     "pnl": pnl,
-                    "return_pct": pnl / (pos["quantity"] * pos["entry_price"]) if pos["quantity"] * pos["entry_price"] > 0 else 0.0,
+                    "return_pct": pnl / entry_notional if entry_notional > 0 else 0.0,
                     "fees": fees,
                 })
                 resolved_tickers.append(ticker)
@@ -420,31 +427,7 @@ class PortfolioSimulator:
         for ticker in resolved_tickers:
             del positions[ticker]
 
-    def _recalculate_cash(
-        self,
-        closed_trades: list[dict[str, Any]],
-        positions: dict[str, dict[str, Any]],
-        total_fees: float,
-    ) -> float:
-        """Recalculate cash from starting capital and trade history."""
-        cash = self._starting_capital
-
-        # Subtract cost of open positions
-        for pos in positions.values():
-            cost = pos["quantity"] * pos["entry_price"] * (1 + FEE_RATE + SLIPPAGE_RATE)
-            cash -= cost
-
-        # Add back closed trade payouts
-        for trade in closed_trades:
-            # The entry cost was already deducted; add back payout
-            entry_cost = trade["quantity"] * trade["entry_price"] * (1 + FEE_RATE + SLIPPAGE_RATE)
-            payout = self._compute_payout(
-                trade["side"], trade["quantity"], trade["entry_price"], trade["exit_price"],
-            )
-            cash -= entry_cost  # deduct entry
-            cash += payout  # add settlement
-
-        return cash
+        return cash_delta, fees_delta
 
     def _update_mark_to_market(
         self, positions: dict[str, dict[str, Any]],
