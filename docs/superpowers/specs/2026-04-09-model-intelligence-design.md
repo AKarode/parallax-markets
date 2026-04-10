@@ -39,30 +39,53 @@ These improvements are deferred until after the dashboard is built -- the dashbo
 
 The pipeline started running on April 7, but the Iran-Hormuz crisis didn't start then. Models have zero historical context — they don't know about the 2019 tanker seizures, the JCPOA collapse timeline, or how markets reacted to past Hormuz escalations. Without this baseline, even multi-day context only captures what happened *since the system turned on*.
 
-### Solution: Structured Situation Briefing
+### Solution: Deep Research Situation Briefing (Opus)
 
-A one-time (weekly-refreshed) LLM-generated intelligence briefing that provides permanent background context to every model call. Think CIA situation report, not raw article dump.
+A one-time (weekly-refreshed) **Opus-generated** deep research intelligence briefing that provides permanent background context to every model call. Think CIA National Intelligence Estimate, not a news summary. Uses Opus (not Sonnet) because this requires deep analytical reasoning about geopolitical patterns, proxy conflict dynamics, and second-order effects.
+
+**Why Opus for this specific call:**
+- Needs to reason about complex geopolitical cause-and-effect chains across decades
+- Must identify non-obvious parallels between proxy conflicts (Israel-Lebanon ↔ Iran-Hormuz)
+- Requires synthesizing disparate data (military, diplomatic, economic, market) into a coherent analytical framework
+- One-time cost (~$0.15) is trivial — this isn't a per-run call
 
 **Why summary over full articles:**
 - Models don't need to re-read 500 articles about 2019 tanker seizures — they need to know it happened and what the market did
 - A curated timeline gives the right abstraction level for probability reasoning
-- Token cost stays flat (~2K tokens vs 50K+ for raw articles)
-- Can include things not in articles: historical market price reactions, resolution patterns of similar contracts
+- Token cost stays flat (~2-4K tokens vs 50K+ for raw articles)
+- Can include things not in articles: historical market price reactions, resolution patterns, proxy conflict analogies
+
+**Critical: Israel-Lebanon as Proxy Analog**
+
+The Israel-Lebanon/Hezbollah conflict is the most relevant proxy for understanding Iran-Hormuz dynamics because:
+- Hezbollah is Iran's primary regional proxy — escalation in one theater directly affects the other
+- The 2006 Lebanon War showed how proxy conflicts escalate: local incident → regional spillover → shipping disruption → oil shock
+- Hezbollah's Red Sea/Houthi coordination demonstrates the Iran-axis maritime doctrine
+- Ceasefire patterns in Lebanon predict ceasefire dynamics for Iran (same mediators, same deal structures, same spoiler dynamics)
+- Market reactions to Lebanon escalations are the closest historical analog for Hormuz pricing
+
+The briefing must include a dedicated section on Israel-Lebanon parallels and what they predict for each contract type.
 
 ### Architecture
 
 ```
-GDELT Historical Archive ──┐
-  (one-time backfill query) │
-                            ├──> Briefing Generator (single Sonnet call)
-EIA Historical Data ────────┤         |
-  (oil price history)       │         v
-                            │    situation_briefings table
-Manual context ─────────────┘    (structured timeline + key facts)
-  (known events, dates)               |
-                                      v
-                              Injected as permanent context
-                              prefix in all 3 predictor prompts
+GDELT Historical Archive ──────┐
+  (backfill: Iran, Hormuz,      │
+   Israel, Lebanon, Hezbollah,  │
+   Houthi, Red Sea)             │
+                                ├──> Deep Research Briefing (Claude Opus)
+EIA Historical Data ────────────┤         |
+  (oil price history,           │         v
+   Brent/WTI during past        │    situation_briefings table
+   crises)                      │    (structured multi-section briefing)
+                                │         |
+Kalshi/Polymarket Historical ───┤         v
+  (contract price history       │    Injected as permanent context
+   during similar events)       │    prefix in all 3 predictor prompts
+                                │
+Academic/Think Tank Sources ────┘
+  (CSIS, IISS, CNA naval
+   analysis — via web search)
 ```
 
 ### Schema Addition
@@ -80,11 +103,13 @@ CREATE TABLE IF NOT EXISTS situation_briefings (
 
 ### Briefing Output Format
 
-```
-## SITUATION BRIEFING: Iran-Hormuz Crisis
-Generated: 2026-04-07 | Valid through: 2026-04-14
+The Opus deep research call should produce a multi-section briefing (~3-4K tokens) covering:
 
-### Timeline of Key Events
+```
+## SITUATION BRIEFING: Iran-Hormuz Crisis & Regional Context
+Generated: 2026-04-07 | Valid through: 2026-04-14 | Model: Claude Opus
+
+### Section 1: Iran-Hormuz Direct Timeline
 - 2019-06: Two tanker attacks in Gulf of Oman. Oil +4% intraday. Markets priced Hormuz closure at ~15%.
 - 2019-07: UK tanker Stena Impero seized by IRGC. Oil +2%. Closure prob rose to ~25%.
 - 2020-01: Soleimani assassination. Oil +3.5%. Closure prob spiked to ~40%, reverted within 72h.
@@ -93,30 +118,115 @@ Generated: 2026-04-07 | Valid through: 2026-04-14
 - 2026-04-01: IRGC begins "Hormuz Shield" naval exercises. Oil +2.8%.
 - 2026-04-05: First commercial shipping diversions reported.
 
-### Historical Market Reactions
+### Section 2: Israel-Lebanon Proxy Analog
+Why this matters: Hezbollah is Iran's primary proxy. Escalation in one theater directly affects the other.
+- 2006 Lebanon War: local incident → regional spillover → shipping disruption → oil +15% in 5 weeks
+- Ceasefire pattern: initial rejection → backchannel (Oman/Qatar) → framework deal → 2-3 week implementation
+- Spoiler dynamics: IRGC hardliners and Israeli far-right both benefit from continued conflict
+- Houthi/Red Sea coordination: Iran-axis maritime doctrine — Hormuz is the escalation ladder from Red Sea disruptions
+- Market behavior: Lebanon escalations caused 60-70% of the volatility attributed to "Iran risk" in 2023-2024
+- Key signal: when Lebanon de-escalates, Hormuz contracts typically drop 5-8% within 48h (reduced proxy pressure)
+
+### Section 3: Pakistan Dimension (Currently Active Mediator)
+Why this matters: Pakistan is actively mediating the Iran crisis (as of April 2026) and controls critical alternative infrastructure.
+- ACTIVE MEDIATOR ROLE: Pakistan is currently facilitating Iran backchannel negotiations.
+  Mediation progress/failure is a leading indicator for ceasefire contract pricing.
+  Key signal: Pakistani FM statements, Islamabad-Tehran shuttle diplomacy frequency.
+- Pakistan-Iran gas pipeline (IP pipeline): perennial geopolitical lever. Construction status signals bilateral temperature.
+- Gwadar port: China-Pakistan alternative to Hormuz transit. If Hormuz closes, Gwadar becomes 
+  critical — increased CPEC/Gwadar activity = market pricing longer disruption.
+- India-Pakistan tensions affect regional military posture — when Pakistan diverts naval assets to Indian border, 
+  Hormuz patrol gaps widen and IRGC freedom of action increases.
+- India's Chabahar port (Iran): India's strategic bypass of Pakistan. Increased Indian investment signals 
+  expectation of prolonged Hormuz instability.
+- Nuclear dimension: Pakistan's nuclear status constrains US military options in the region.
+- Balochistan insurgency: cross-border Iran-Pakistan incidents (e.g., Jan 2024 mutual strikes) 
+  signal Iran's willingness to use force and regional instability level.
+- Mediation precedent: Pakistan mediated Saudi-Iran rapprochement (2023 via China). 
+  Success/failure pattern: 2-4 weeks of quiet diplomacy → public framework or collapse.
+
+### Section 4: Historical Market Reactions (Cross-Theater)
 - Tanker seizure events: +2-4% oil, +10-15% Hormuz closure prob (decays 50% within 1 week)
 - Diplomatic breakthroughs: -3-5% oil, -8-12% closure prob (persistent)
 - Military exercises: +1-2% oil, +3-5% closure prob (decays unless escalation follows)
+- Lebanon escalation: +1-3% oil, +3-8% Hormuz prob (correlated via Iran axis)
+- Pakistan-Iran border incidents: +0.5-1% oil (small), +2-3% Hormuz prob (signals regional instability)
+- India-Pakistan standoff: +1-2% oil (demand rerouting), neutral on Hormuz unless naval assets move
 
-### Current Baseline (as of briefing date)
+### Section 5: Analytical Framework for Prediction Models
+- Escalation ladder: Red Sea harassment → Hormuz exercises → selective tanker interdiction → full blockade
+- De-escalation signals: backchannel confirmation, carrier group withdrawal, insurance rate drops
+- Cross-theater correlation: Lebanon ceasefire → 60% chance Hormuz de-escalates within 2 weeks
+- Pakistan wildcard: bilateral tensions with India or Iran create unpredictable regional instability
+- Time decay: crisis premiums decay ~3-5% per week without new escalatory events
+
+### Section 6: Current Baseline (as of briefing date)
 - Hormuz closure probability: ~55-60% (Kalshi)
 - WTI crude: ~$82/bbl (elevated $8-10 above pre-crisis)
 - US carrier groups: 2 in region (Eisenhower + Lincoln)
 - Insurance rates: 3x normal for Hormuz transit
+- Lebanon status: [current state]
+- Pakistan-Iran relations: [current state]
+- India-Pakistan tension level: [current state]
 ```
+
+### Research Sources for Opus Call
+
+The briefing generator should feed Opus with data from:
+- **GDELT archive**: Historical articles on Iran, Hormuz, Israel, Lebanon, Hezbollah, Houthi, Pakistan, India-Pakistan, Balochistan (backfill query)
+- **EIA historical data**: Oil prices during each crisis event (already available)
+- **Kalshi/Polymarket historical**: Contract prices during similar events (if available)
+- **Web search** (at generation time): CSIS, IISS, CNA naval analysis, Stimson Center for Pakistan-Iran dynamics, Carnegie Endowment for India-Pakistan
 
 ### Refresh Strategy
 
-- Generated once on system startup via single Sonnet call (~$0.01)
-- Refreshed weekly or when user triggers manual refresh
+- Generated once on system startup via single Opus call (~$0.15)
+- Refreshed weekly or when major geopolitical shift occurs (user-triggered)
 - GDELT archive query for historical articles (free, one-time)
+- Web search for think tank analysis (free, at generation time)
 - EIA historical oil prices (already available via existing API)
 
 ### Cost
 
-- Initial generation: ~$0.01 (one Sonnet call with historical context)
-- Weekly refresh: ~$0.01
-- Negligible impact on $20/day budget
+- Initial generation: ~$0.15 (one Opus call with deep research)
+- Weekly refresh: ~$0.15
+- Negligible impact on $20/day budget (this is a weekly cost, not per-run)
+
+### Live Data Ingestion Updates
+
+The briefing gives historical context, but the live pipeline also needs to track proxy theaters in real-time. These changes apply to the existing ingestion modules:
+
+**Google News RSS queries to add** (in `ingestion/google_news.py` `FEED_QUERIES`):
+```python
+# Proxy theaters (add to existing list)
+"israel lebanon hezbollah",
+"houthi red sea shipping",
+"pakistan iran mediation",
+"pakistan india tensions",
+"gwadar port cpec",
+"iran balochistan",
+```
+
+**Critical entities to add** (in `ingestion/entities.py` `CRITICAL_ENTITIES`):
+```python
+# Israel-Lebanon proxy
+"Hezbollah", "IDF", "Netanyahu", "Nasrallah", "UNIFIL",
+"South Lebanon", "Litani River", "Iron Dome",
+# Houthi / Red Sea
+"Houthi", "Ansar Allah", "Bab el-Mandeb", "Red Sea",
+"Suez Canal", "Aden", "Yemen",
+# Pakistan mediation & regional
+"Pakistan mediation", "Islamabad", "Gwadar", "CPEC",
+"Karakoram", "Balochistan", "Chabahar",
+"Pakistan foreign minister", "ISI",
+# India-Pakistan
+"Line of Control", "Kashmir", "Modi", "Sharif",
+```
+
+**GDELT DOC queries to add** (in `ingestion/gdelt_doc.py`):
+- Expand query terms to include proxy theater keywords alongside existing Iran/Hormuz terms.
+
+These changes are small — just appending to existing lists — but they ensure the live pipeline catches proxy theater developments that directly affect Hormuz contract pricing.
 
 ---
 
