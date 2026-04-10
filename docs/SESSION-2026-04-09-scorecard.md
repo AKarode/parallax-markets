@@ -103,6 +103,18 @@ Major session covering the full v1.3 milestone sprint. Merged PR #18 (signal int
 **Fix:** `lsof -ti:8501 | xargs kill -9` before restart
 **Lesson:** Kill old processes before relaunching
 
+### 6. Market context dict key mismatch
+**Problem:** Pipeline crashed with `KeyError: 'yes_price'` in all 3 predictors
+**Root cause:** `brief.py` builds market context with `derived_yes_price` key, but predictors expected `yes_price`
+**Fix:** Changed all 3 predictors to `mp.get("derived_yes_price") or mp.get("yes_price")`
+**Lesson:** When two modules share a dict, check the actual keys — naming drifts across refactors
+
+### 7. NOT NULL constraint on legacy raw_edge column
+**Problem:** `ConstraintException: NOT NULL constraint failed: signal_ledger.raw_edge`
+**Root cause:** Live DB created under older schema where `raw_edge` was NOT NULL. New code passes `None` for REFUSED signals.
+**Fix:** Coalesce to 0.0 in ledger.py: `raw_edge=mapping.raw_edge or 0.0`
+**Lesson:** Always check live DB column constraints, not just the CREATE TABLE definition
+
 ## Current State
 
 - **281 tests passing**, 14 pre-existing failures (mapping_policy + recalibration from signal integrity branch)
@@ -110,10 +122,12 @@ Major session covering the full v1.3 milestone sprint. Merged PR #18 (signal int
 - Phase 8 partially complete: dashboard done (ALERT-04), threshold alerting (ALERT-01/02/03) still needed
 - `parallax brief --scorecard --date 2026-04-09` works end-to-end
 - Dashboard at `localhost:8501` with Overview, Scorecard, Trades tabs
-- Cron script ready for WSL/Mac deployment
+- **Cron installed on MacBook** — 8am + 8pm local. First real run completed: 3 predictions, 13 signals, scorecard computed.
+- **Pipeline fully operational** — news (Google + GDELT) → LLM predictions (3x Sonnet) → Kalshi market reads → signal evaluation → scorecard. All working with real data.
 - Edge decay tracker collecting data from day 1
 - GitHub issues #19-#23 created for Sprint A tracking
 - Exit logic research complete — verdict: hold to settlement, collect edge decay data first
+- Data accumulating at `backend/data/parallax.duckdb`, logs at `~/parallax-logs/`
 
 ## Environment
 
@@ -145,6 +159,8 @@ Dashboard: `DUCKDB_PATH=data/parallax.duckdb streamlit run src/parallax/dashboar
 ## Commits
 
 ```
+48791e4 fix: handle derived_yes_price key in market context and NULL raw_edge in legacy DBs
+f0d8d04 docs: final session log for v1.3 scorecard + dashboard + exit research
 35c0a89 feat(calibration): add edge decay over time tracking for exit-logic feasibility
 125a12f feat(dashboard): add scorecard and trades tabs to Streamlit dashboard
 7c4ecca feat: add cron pipeline script and WSL deployment instructions
