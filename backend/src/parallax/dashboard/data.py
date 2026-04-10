@@ -14,6 +14,7 @@ import duckdb
 from parallax.scoring.calibration import (
     calibration_curve,
     edge_decay,
+    edge_decay_over_time,
     hit_rate_by_proxy_class,
 )
 
@@ -212,3 +213,306 @@ def get_trade_journal(
         }
         for row in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# New dashboard query functions
+# ---------------------------------------------------------------------------
+
+
+def get_scorecard_metrics(
+    conn: duckdb.DuckDBPyConnection, date_str: str | None = None,
+) -> dict:
+    """Return latest daily_scorecard metrics as a flat dict.
+
+    Args:
+        conn: DuckDB connection.
+        date_str: Optional ISO date string (YYYY-MM-DD). Uses most recent if None.
+
+    Returns:
+        Dict with scorecard metric keys. All None if no data.
+    """
+    if date_str is None:
+        row = conn.execute(
+            "SELECT MAX(score_date) FROM daily_scorecard",
+        ).fetchone()
+        if row is None or row[0] is None:
+            return {
+                "signal_hit_rate": None,
+                "signal_brier_score": None,
+                "signal_calibration_max_gap": None,
+                "ops_llm_cost_usd": None,
+                "ops_run_count": None,
+                "ops_run_success_rate": None,
+                "ops_error_alert_count": None,
+                "score_date": None,
+            }
+        date_str = str(row[0])
+
+    rows = conn.execute(
+        """
+        SELECT metric_name, metric_value
+        FROM daily_scorecard
+        WHERE score_date = ?
+        """,
+        [date_str],
+    ).fetchall()
+
+    metrics: dict = {
+        "signal_hit_rate": None,
+        "signal_brier_score": None,
+        "signal_calibration_max_gap": None,
+        "ops_llm_cost_usd": None,
+        "ops_run_count": None,
+        "ops_run_success_rate": None,
+        "ops_error_alert_count": None,
+        "score_date": date_str,
+    }
+    for name, value in rows:
+        if name in metrics:
+            metrics[name] = float(value) if value is not None else None
+    return metrics
+
+
+def get_signals_for_contract(
+    conn: duckdb.DuckDBPyConnection, contract_ticker: str, limit: int = 20,
+) -> list[dict]:
+    """Signal history for a specific contract from signal_ledger, most recent first.
+
+    Args:
+        conn: DuckDB connection.
+        contract_ticker: Contract ticker to filter by.
+        limit: Max signals to return.
+
+    Returns:
+        List of signal dicts.
+    """
+    rows = conn.execute(
+        """
+        SELECT signal_id, created_at, model_id, effective_edge, signal,
+               model_probability, entry_price, entry_side, resolution_price,
+               model_was_correct, run_id
+        FROM signal_ledger
+        WHERE contract_ticker = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        [contract_ticker, limit],
+    ).fetchall()
+
+    return [
+        {
+            "signal_id": row[0],
+            "created_at": row[1],
+            "model_id": row[2],
+            "effective_edge": float(row[3]) if row[3] is not None else 0.0,
+            "signal": row[4],
+            "model_probability": float(row[5]) if row[5] is not None else None,
+            "entry_price": float(row[6]) if row[6] is not None else None,
+            "entry_side": row[7],
+            "resolution_price": float(row[8]) if row[8] is not None else None,
+            "model_was_correct": row[9],
+            "run_id": row[10],
+        }
+        for row in rows
+    ]
+
+
+def get_active_contracts(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Active contracts from contract_registry with proxy mappings.
+
+    Returns:
+        List of contract dicts with proxy_map and best_proxy fields.
+    """
+    contracts = conn.execute(
+        """
+        SELECT ticker, source, event_ticker, title, resolution_criteria,
+               resolution_date, contract_family, expected_fee_rate,
+               expected_slippage_rate
+        FROM contract_registry
+        WHERE is_active = true
+        ORDER BY ticker
+        """,
+    ).fetchall()
+
+    result = []
+    for row in contracts:
+        ticker = row[0]
+        proxy_rows = conn.execute(
+            """
+            SELECT model_type, proxy_class, confidence_discount
+            FROM contract_proxy_map
+            WHERE ticker = ?
+            """,
+            [ticker],
+        ).fetchall()
+
+        proxy_map: dict[str, dict] = {}
+        best_proxy: str | None = None
+        best_discount = 0.0
+        for pr in proxy_rows:
+            proxy_map[pr[0]] = {
+                "proxy_class": pr[1],
+                "confidence_discount": float(pr[2]),
+            }
+            if pr[1] == "DIRECT":
+                best_proxy = "DIRECT"
+            elif float(pr[2]) > best_discount and best_proxy != "DIRECT":
+                best_discount = float(pr[2])
+                best_proxy = pr[1]
+
+        result.append({
+            "ticker": ticker,
+            "source": row[1],
+            "event_ticker": row[2],
+            "title": row[3],
+            "resolution_criteria": row[4],
+            "resolution_date": row[5],
+            "contract_family": row[6],
+            "expected_fee_rate": float(row[7]) if row[7] is not None else None,
+            "expected_slippage_rate": float(row[8]) if row[8] is not None else None,
+            "proxy_map": proxy_map,
+            "best_proxy": best_proxy,
+        })
+
+    return result
+
+
+def get_edge_decay_for_contract(
+    conn: duckdb.DuckDBPyConnection, contract_ticker: str,
+) -> dict:
+    """Edge decay analysis for a specific contract.
+
+    Uses edge_decay_over_time() and filters to the given contract_ticker.
+
+    Returns:
+        Dict with n_pairs, avg_decay_rate, avg_edge_change, time_to_zero_edge,
+        round_trip_cost, exit_profitable, verdict.
+    """
+    all_pairs = edge_decay_over_time(conn)
+    pairs = [p for p in all_pairs if p["contract_ticker"] == contract_ticker]
+
+    round_trip_cost = 0.055
+
+    if not pairs:
+        return {
+            "n_pairs": 0,
+            "avg_decay_rate": None,
+            "avg_edge_change": None,
+            "time_to_zero_edge": None,
+            "round_trip_cost": round_trip_cost,
+            "exit_profitable": False,
+            "verdict": "insufficient data",
+        }
+
+    decay_rates = [p["decay_rate_per_hour"] for p in pairs if p["decay_rate_per_hour"] is not None]
+    edge_changes = [p["edge_change"] for p in pairs]
+
+    avg_decay_rate = sum(decay_rates) / len(decay_rates) if decay_rates else None
+    avg_edge_change = sum(edge_changes) / len(edge_changes) if edge_changes else None
+
+    time_to_zero: float | None = None
+    if avg_decay_rate is not None and avg_decay_rate < 0:
+        avg_edge_start = sum(p["edge_a"] for p in pairs) / len(pairs)
+        if avg_edge_start > 0:
+            time_to_zero = abs(avg_edge_start / avg_decay_rate)
+
+    exit_profitable = (
+        avg_edge_change is not None
+        and abs(avg_edge_change) > round_trip_cost
+    )
+
+    if exit_profitable:
+        verdict = "edge decays fast enough to consider exit trading"
+    elif avg_edge_change is not None:
+        verdict = "hold to settlement — edge decay slower than round-trip cost"
+    else:
+        verdict = "insufficient data"
+
+    return {
+        "n_pairs": len(pairs),
+        "avg_decay_rate": avg_decay_rate,
+        "avg_edge_change": avg_edge_change,
+        "time_to_zero_edge": time_to_zero,
+        "round_trip_cost": round_trip_cost,
+        "exit_profitable": exit_profitable,
+        "verdict": verdict,
+    }
+
+
+def get_price_history(
+    conn: duckdb.DuckDBPyConnection, ticker: str, limit: int = 100,
+) -> list[dict]:
+    """Market price history for a ticker, oldest first (for charting).
+
+    Args:
+        conn: DuckDB connection.
+        ticker: Market ticker to filter by.
+        limit: Max entries to return.
+
+    Returns:
+        List of price dicts ordered oldest-first.
+    """
+    rows = conn.execute(
+        """
+        SELECT fetched_at, yes_price, no_price, volume, best_yes_bid, best_yes_ask
+        FROM market_prices
+        WHERE ticker = ?
+        ORDER BY fetched_at ASC
+        LIMIT ?
+        """,
+        [ticker, limit],
+    ).fetchall()
+
+    return [
+        {
+            "fetched_at": row[0],
+            "yes_price": float(row[1]) if row[1] is not None else None,
+            "no_price": float(row[2]) if row[2] is not None else None,
+            "volume": float(row[3]) if row[3] is not None else None,
+            "best_yes_bid": float(row[4]) if row[4] is not None else None,
+            "best_yes_ask": float(row[5]) if row[5] is not None else None,
+        }
+        for row in rows
+    ]
+
+
+def get_prediction_history(
+    conn: duckdb.DuckDBPyConnection, limit: int = 50,
+) -> dict[str, list[dict]]:
+    """Prediction history grouped by model_id, oldest first.
+
+    Args:
+        conn: DuckDB connection.
+        limit: Max entries per model.
+
+    Returns:
+        Dict keyed by model_id, each value a list of prediction dicts.
+    """
+    rows = conn.execute(
+        """
+        SELECT model_id, probability, direction, confidence, created_at, run_id
+        FROM prediction_log
+        ORDER BY created_at ASC
+        """,
+    ).fetchall()
+
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        model_id = row[0]
+        entry = {
+            "probability": float(row[1]),
+            "direction": row[2],
+            "confidence": float(row[3]),
+            "created_at": row[4],
+            "run_id": row[5],
+        }
+        if model_id not in grouped:
+            grouped[model_id] = []
+        grouped[model_id].append(entry)
+
+    # Apply per-model limit
+    for model_id in grouped:
+        grouped[model_id] = grouped[model_id][-limit:]
+
+    return grouped
