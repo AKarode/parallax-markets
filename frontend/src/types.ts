@@ -121,6 +121,31 @@ export interface SignalsResponse {
   signals: SignalRecord[]
 }
 
+export interface LatestSignal {
+  signal_id: string
+  contract_ticker: string
+  model_id: string
+  proxy_class: string | null
+  model_probability: number | null
+  effective_edge: number
+  signal: string
+  entry_side: string | null
+  entry_price: number | null
+  model_reasoning: string | null
+  market_yes_price: number | null
+  market_no_price: number | null
+  market_volume: number | null
+  best_yes_bid: number | null
+  best_yes_ask: number | null
+  best_no_bid: number | null
+  best_no_ask: number | null
+  market_source: string | null
+}
+
+export interface LatestSignalsResponse {
+  signals: LatestSignal[]
+}
+
 export interface EdgeDecayAnalysis {
   n_pairs: number
   avg_decay_rate: number | null

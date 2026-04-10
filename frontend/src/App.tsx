@@ -14,6 +14,7 @@ import type {
   ContractsResponse,
   PredictionHistoryResponse,
   PortfolioState,
+  LatestSignalsResponse,
 } from './types'
 
 export function App() {
@@ -25,6 +26,7 @@ export function App() {
   const contracts = usePolling<ContractsResponse>('/api/contracts')
   const predictionHistory = usePolling<PredictionHistoryResponse>('/api/prediction-history')
   const portfolio = usePolling<PortfolioState>('/api/portfolio')
+  const latestSignals = usePolling<LatestSignalsResponse>('/api/latest-signals')
 
   return (
     <div className="dashboard">
@@ -33,6 +35,7 @@ export function App() {
         portfolio={portfolio.data}
         scorecard={scorecard.data}
         divergences={divergences.data}
+        latestSignals={latestSignals.data}
       />
 
       <ModelCards
@@ -47,6 +50,7 @@ export function App() {
         contracts={contracts.data}
         predictions={predictions.data}
         predictionHistory={predictionHistory.data}
+        latestSignals={latestSignals.data}
       />
 
       <div className="two-col">

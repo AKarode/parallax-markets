@@ -257,6 +257,18 @@ async def run_brief_endpoint():
 # ---------------------------------------------------------------------------
 
 
+@app.get("/api/latest-signals")
+async def get_latest_signals():
+    """Return latest run signals with market prices (DB-backed, always available)."""
+    from parallax.dashboard.data import get_latest_signals_with_markets
+
+    try:
+        return {"signals": get_latest_signals_with_markets(app.state.db)}
+    except Exception:
+        logger.exception("Latest signals query failed")
+        return {"signals": []}
+
+
 @app.get("/api/scorecard")
 async def get_scorecard(date: str | None = None):
     """Return daily scorecard metrics."""

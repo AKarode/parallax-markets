@@ -1,4 +1,4 @@
-import type { HealthResponse, PortfolioState, ScorecardMetrics, DivergencesResponse } from '../types'
+import type { HealthResponse, PortfolioState, ScorecardMetrics, DivergencesResponse, LatestSignalsResponse } from '../types'
 import { usd, signedPct, relativeTime, pct } from '../lib/format'
 import { colors } from '../lib/colors'
 
@@ -7,6 +7,7 @@ interface KpiBarProps {
   portfolio: PortfolioState | null
   scorecard: ScorecardMetrics | null
   divergences: DivergencesResponse | null
+  latestSignals?: LatestSignalsResponse | null
 }
 
 const BUDGET_CAP = 20
@@ -37,9 +38,14 @@ function countActiveSignals(divergences: DivergencesResponse | null): number {
   ).length
 }
 
-export function KpiBar({ health, portfolio, scorecard, divergences }: KpiBarProps) {
+export function KpiBar({ health, portfolio, scorecard, divergences, latestSignals }: KpiBarProps) {
   const returnPct = portfolio?.portfolio_return_pct
-  const activeSignals = countActiveSignals(divergences)
+  // Fall back to latest-signals count when divergences cache is empty
+  const divergenceCount = countActiveSignals(divergences)
+  const latestCount = latestSignals?.signals.filter(
+    s => s.signal !== 'HOLD' && s.signal !== 'REFUSED'
+  ).length ?? 0
+  const activeSignals = divergenceCount > 0 ? divergenceCount : latestCount
   const llmCost = scorecard?.ops_llm_cost_usd
 
   return (

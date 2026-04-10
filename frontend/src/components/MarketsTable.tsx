@@ -7,9 +7,8 @@ import type {
   ContractsResponse,
   PredictionsResponse,
   PredictionHistoryResponse,
-  Divergence,
+  LatestSignalsResponse,
   ContractInfo,
-  MarketData,
 } from '../types'
 
 interface MarketsTableProps {
@@ -18,6 +17,7 @@ interface MarketsTableProps {
   contracts: ContractsResponse | null
   predictions: PredictionsResponse | null
   predictionHistory: PredictionHistoryResponse | null
+  latestSignals?: LatestSignalsResponse | null
 }
 
 function signalBadgeClass(signal: string): string {
@@ -30,19 +30,21 @@ function signalBadgeClass(signal: string): string {
 
 function proxyBadgeClass(proxy: string | null): string {
   switch (proxy) {
-    case 'DIRECT': return 'badge badge-direct'
-    case 'NEAR_PROXY': return 'badge badge-near'
-    case 'LOOSE_PROXY': return 'badge badge-loose'
+    case 'DIRECT': case 'direct': return 'badge badge-direct'
+    case 'NEAR_PROXY': case 'near_proxy': return 'badge badge-near'
+    case 'LOOSE_PROXY': case 'loose_proxy': return 'badge badge-loose'
     default: return 'badge badge-loose'
   }
 }
 
 function proxyLabel(proxy: string | null): string {
-  switch (proxy) {
+  if (!proxy) return ''
+  const upper = proxy.toUpperCase()
+  switch (upper) {
     case 'DIRECT': return 'DIRECT'
     case 'NEAR_PROXY': return 'NEAR'
     case 'LOOSE_PROXY': return 'LOOSE'
-    default: return proxy ?? ''
+    default: return upper
   }
 }
 
@@ -59,28 +61,26 @@ function edgeColorClass(edgeVal: number | null): string {
   return edgeVal >= 0 ? 'c-green' : 'c-red'
 }
 
+// Unified row shape for both divergences and latest-signals
+interface TableRow {
+  ticker: string
+  title: string
+  marketPrice: number | null
+  modelPrice: number | null
+  edgeValue: number
+  proxy: string | null
+  signal: string
+  volume: number | null
+  reasoning: string | null
+}
+
 export function MarketsTable({
   divergences,
   markets,
   contracts,
+  latestSignals,
 }: MarketsTableProps) {
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null)
-
-  if (!divergences || divergences.divergences.length === 0) {
-    return (
-      <div>
-        <div className="section-label">Markets</div>
-        <span className="loading-text">No divergences available</span>
-      </div>
-    )
-  }
-
-  const marketMap = new Map<string, MarketData>()
-  if (markets) {
-    for (const m of markets.markets) {
-      marketMap.set(m.ticker, m)
-    }
-  }
 
   const contractMap = new Map<string, ContractInfo>()
   if (contracts) {
@@ -89,18 +89,54 @@ export function MarketsTable({
     }
   }
 
-  const sorted = [...divergences.divergences].sort((a, b) => {
-    const absA = Math.abs(a.edge ?? 0)
-    const absB = Math.abs(b.edge ?? 0)
-    return absB - absA
-  })
+  // Build rows: prefer divergences, fall back to latestSignals
+  let rows: TableRow[] = []
 
-  function getTicker(d: Divergence): string {
-    return d.market_price?.ticker ?? d.model_id
+  const hasDivergences = divergences && divergences.divergences.length > 0
+
+  if (hasDivergences) {
+    rows = divergences.divergences.map(d => {
+      const ticker = d.market_price?.ticker ?? d.model_id
+      const contract = contractMap.get(ticker)
+      return {
+        ticker,
+        title: contract?.title ?? ticker,
+        marketPrice: d.market_probability,
+        modelPrice: d.model_probability,
+        edgeValue: d.edge ?? 0,
+        proxy: contract?.best_proxy ?? null,
+        signal: d.signal,
+        volume: d.market_price?.volume ?? null,
+        reasoning: d.prediction?.reasoning ?? null,
+      }
+    })
+  } else if (latestSignals && latestSignals.signals.length > 0) {
+    rows = latestSignals.signals.map(s => {
+      const contract = contractMap.get(s.contract_ticker)
+      return {
+        ticker: s.contract_ticker,
+        title: contract?.title ?? s.contract_ticker,
+        marketPrice: s.market_yes_price,
+        modelPrice: s.model_probability,
+        edgeValue: s.effective_edge,
+        proxy: s.proxy_class ?? contract?.best_proxy ?? null,
+        signal: s.signal,
+        volume: s.market_volume,
+        reasoning: s.model_reasoning,
+      }
+    })
   }
 
-  function toggleExpand(ticker: string) {
-    setExpandedTicker((prev) => (prev === ticker ? null : ticker))
+  // Sort by absolute edge descending
+  rows.sort((a, b) => Math.abs(b.edgeValue) - Math.abs(a.edgeValue))
+
+  if (rows.length === 0) {
+    return (
+      <div>
+        <div className="section-label">Markets</div>
+        <span className="loading-text">No signal data available</span>
+      </div>
+    )
   }
 
   return (
@@ -120,52 +156,44 @@ export function MarketsTable({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((d) => {
-            const ticker = getTicker(d)
-            const market = marketMap.get(ticker) ?? d.market_price ?? null
-            const contract = contractMap.get(ticker)
-            const isExpanded = expandedTicker === ticker
+          {rows.map(row => {
+            const isExpanded = expandedTicker === row.ticker
+            const contract = contractMap.get(row.ticker)
 
             return (
-              <Fragment key={ticker}>
+              <Fragment key={row.ticker}>
                 <tr
-                  className={rowClass(d.signal, isExpanded)}
-                  onClick={() => toggleExpand(ticker)}
+                  className={rowClass(row.signal, isExpanded)}
+                  onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
                   style={{ cursor: 'pointer' }}
                 >
                   <td>
-                    <div style={{ fontWeight: 500 }}>{ticker}</div>
-                    {contract && (
-                      <div className="c-subtle" style={{ fontSize: 11 }}>
-                        {contract.title}
-                      </div>
+                    <div style={{ fontWeight: 500 }}>{row.ticker}</div>
+                    <div className="c-subtle" style={{ fontSize: 11 }}>{row.title}</div>
+                  </td>
+                  <td>{pct(row.marketPrice)}</td>
+                  <td>{pct(row.modelPrice)}</td>
+                  <td className={edgeColorClass(row.edgeValue)}>{edge(row.edgeValue)}</td>
+                  <td>
+                    {row.proxy && (
+                      <span className={proxyBadgeClass(row.proxy)}>
+                        {proxyLabel(row.proxy)}
+                      </span>
                     )}
                   </td>
-                  <td>{pct(d.market_probability)}</td>
-                  <td>{pct(d.model_probability)}</td>
-                  <td className={edgeColorClass(d.edge)}>{edge(d.edge)}</td>
                   <td>
-                    {contract?.best_proxy ? (
-                      <span className={proxyBadgeClass(contract.best_proxy)}>
-                        {proxyLabel(contract.best_proxy)}
-                      </span>
-                    ) : null}
+                    <span className={signalBadgeClass(row.signal)}>{row.signal.replace('_', ' ')}</span>
                   </td>
+                  <td className="c-muted">{row.volume?.toFixed(0) ?? '\u2014'}</td>
                   <td>
-                    <span className={signalBadgeClass(d.signal)}>{d.signal}</span>
-                  </td>
-                  <td className="c-muted">{market?.volume ?? '\u2014'}</td>
-                  <td>
-                    <span className={isExpanded ? 'expand-arrow open' : 'expand-arrow'}>
-                      &#x25B8;
-                    </span>
+                    <span className={isExpanded ? 'expand-arrow open' : 'expand-arrow'}>&#x25B8;</span>
                   </td>
                 </tr>
                 {isExpanded && contract && (
                   <ContractDetail
                     contract={contract}
-                    divergence={d}
-                    market={market}
+                    divergence={null}
+                    market={null}
                   />
                 )}
               </Fragment>

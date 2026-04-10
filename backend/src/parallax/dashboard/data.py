@@ -220,6 +220,77 @@ def get_trade_journal(
 # ---------------------------------------------------------------------------
 
 
+def get_latest_signals_with_markets(
+    conn: duckdb.DuckDBPyConnection,
+) -> list[dict]:
+    """Return latest run's signals joined with most recent market prices.
+
+    This powers the markets table when the live divergence cache is empty.
+    Groups by contract_ticker, picks the signal with highest absolute edge per contract.
+    """
+    rows = conn.execute("""
+        WITH latest_run AS (
+            SELECT run_id FROM signal_ledger
+            WHERE signal IN ('BUY_YES', 'BUY_NO', 'HOLD')
+            ORDER BY created_at DESC LIMIT 1
+        ),
+        latest_signals AS (
+            SELECT
+                s.signal_id, s.contract_ticker, s.model_id, s.proxy_class,
+                s.model_probability, s.effective_edge, s.signal, s.entry_side,
+                s.entry_price, s.model_reasoning, s.created_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY s.contract_ticker
+                    ORDER BY ABS(s.effective_edge) DESC NULLS LAST
+                ) AS rn
+            FROM signal_ledger s
+            JOIN latest_run lr ON s.run_id = lr.run_id
+        ),
+        latest_prices AS (
+            SELECT
+                ticker, yes_price, no_price, volume, best_yes_bid, best_yes_ask,
+                best_no_bid, best_no_ask, fetched_at, source,
+                ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY fetched_at DESC) AS rn
+            FROM market_prices
+        )
+        SELECT
+            s.signal_id, s.contract_ticker, s.model_id, s.proxy_class,
+            s.model_probability, s.effective_edge, s.signal, s.entry_side,
+            s.entry_price, s.model_reasoning,
+            p.yes_price, p.no_price, p.volume, p.best_yes_bid, p.best_yes_ask,
+            p.best_no_bid, p.best_no_ask, p.source
+        FROM latest_signals s
+        LEFT JOIN latest_prices p
+            ON p.ticker = s.contract_ticker AND p.rn = 1
+        WHERE s.rn = 1
+        ORDER BY ABS(s.effective_edge) DESC NULLS LAST
+    """).fetchall()
+
+    return [
+        {
+            "signal_id": r[0],
+            "contract_ticker": r[1],
+            "model_id": r[2],
+            "proxy_class": r[3],
+            "model_probability": float(r[4]) if r[4] is not None else None,
+            "effective_edge": float(r[5]) if r[5] is not None else 0.0,
+            "signal": r[6],
+            "entry_side": r[7],
+            "entry_price": float(r[8]) if r[8] is not None else None,
+            "model_reasoning": r[9],
+            "market_yes_price": float(r[10]) if r[10] is not None else None,
+            "market_no_price": float(r[11]) if r[11] is not None else None,
+            "market_volume": float(r[12]) if r[12] is not None else None,
+            "best_yes_bid": float(r[13]) if r[13] is not None else None,
+            "best_yes_ask": float(r[14]) if r[14] is not None else None,
+            "best_no_bid": float(r[15]) if r[15] is not None else None,
+            "best_no_ask": float(r[16]) if r[16] is not None else None,
+            "market_source": r[17],
+        }
+        for r in rows
+    ]
+
+
 def get_scorecard_metrics(
     conn: duckdb.DuckDBPyConnection, date_str: str | None = None,
 ) -> dict:
