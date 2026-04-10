@@ -33,6 +33,93 @@ These improvements are deferred until after the dashboard is built -- the dashbo
 
 ---
 
+## Improvement 0: Historical Situation Briefing (Prerequisite)
+
+### Problem
+
+The pipeline started running on April 7, but the Iran-Hormuz crisis didn't start then. Models have zero historical context — they don't know about the 2019 tanker seizures, the JCPOA collapse timeline, or how markets reacted to past Hormuz escalations. Without this baseline, even multi-day context only captures what happened *since the system turned on*.
+
+### Solution: Structured Situation Briefing
+
+A one-time (weekly-refreshed) LLM-generated intelligence briefing that provides permanent background context to every model call. Think CIA situation report, not raw article dump.
+
+**Why summary over full articles:**
+- Models don't need to re-read 500 articles about 2019 tanker seizures — they need to know it happened and what the market did
+- A curated timeline gives the right abstraction level for probability reasoning
+- Token cost stays flat (~2K tokens vs 50K+ for raw articles)
+- Can include things not in articles: historical market price reactions, resolution patterns of similar contracts
+
+### Architecture
+
+```
+GDELT Historical Archive ──┐
+  (one-time backfill query) │
+                            ├──> Briefing Generator (single Sonnet call)
+EIA Historical Data ────────┤         |
+  (oil price history)       │         v
+                            │    situation_briefings table
+Manual context ─────────────┘    (structured timeline + key facts)
+  (known events, dates)               |
+                                      v
+                              Injected as permanent context
+                              prefix in all 3 predictor prompts
+```
+
+### Schema Addition
+
+```sql
+CREATE TABLE IF NOT EXISTS situation_briefings (
+    briefing_id     VARCHAR PRIMARY KEY,
+    topic           VARCHAR NOT NULL,       -- "iran_hormuz" | "oil_markets" | "us_iran_diplomacy"
+    content         VARCHAR NOT NULL,       -- structured briefing text
+    generated_at    TIMESTAMP DEFAULT now(),
+    valid_until     DATE,                   -- refresh weekly
+    source_summary  VARCHAR                 -- what data went into this
+);
+```
+
+### Briefing Output Format
+
+```
+## SITUATION BRIEFING: Iran-Hormuz Crisis
+Generated: 2026-04-07 | Valid through: 2026-04-14
+
+### Timeline of Key Events
+- 2019-06: Two tanker attacks in Gulf of Oman. Oil +4% intraday. Markets priced Hormuz closure at ~15%.
+- 2019-07: UK tanker Stena Impero seized by IRGC. Oil +2%. Closure prob rose to ~25%.
+- 2020-01: Soleimani assassination. Oil +3.5%. Closure prob spiked to ~40%, reverted within 72h.
+- 2023-09: IRGC drone/missile buildup reported. Gradual 5% oil premium.
+- 2026-03: US withdraws from JCPOA revival talks. Iran announces enrichment to 90%.
+- 2026-04-01: IRGC begins "Hormuz Shield" naval exercises. Oil +2.8%.
+- 2026-04-05: First commercial shipping diversions reported.
+
+### Historical Market Reactions
+- Tanker seizure events: +2-4% oil, +10-15% Hormuz closure prob (decays 50% within 1 week)
+- Diplomatic breakthroughs: -3-5% oil, -8-12% closure prob (persistent)
+- Military exercises: +1-2% oil, +3-5% closure prob (decays unless escalation follows)
+
+### Current Baseline (as of briefing date)
+- Hormuz closure probability: ~55-60% (Kalshi)
+- WTI crude: ~$82/bbl (elevated $8-10 above pre-crisis)
+- US carrier groups: 2 in region (Eisenhower + Lincoln)
+- Insurance rates: 3x normal for Hormuz transit
+```
+
+### Refresh Strategy
+
+- Generated once on system startup via single Sonnet call (~$0.01)
+- Refreshed weekly or when user triggers manual refresh
+- GDELT archive query for historical articles (free, one-time)
+- EIA historical oil prices (already available via existing API)
+
+### Cost
+
+- Initial generation: ~$0.01 (one Sonnet call with historical context)
+- Weekly refresh: ~$0.01
+- Negligible impact on $20/day budget
+
+---
+
 ## Improvement 1: Multi-Day News Context
 
 ### Problem
@@ -329,14 +416,21 @@ After accumulating 2+ weeks of data, add a section to prediction prompts:
 
 ## Implementation Sequence
 
-All three improvements depend on `news_events` persistence (Improvement 1 is prerequisite).
+All improvements build on the historical briefing and news persistence layer.
 
 ```
+Phase 0: Historical Situation Briefing
+  - situation_briefings table
+  - GDELT historical backfill query
+  - One-time Sonnet call to generate briefing
+  - Inject as permanent context prefix in all 3 predictors
+  - Validate: do predictions improve with historical context?
+
 Phase 1: Multi-Day News Context
   - news_events table + dedup logic
   - context_builder module
-  - prompt integration in 3 predictors
-  - Validate: do predictions change meaningfully with context?
+  - prompt integration in 3 predictors (alongside situation briefing)
+  - Validate: do predictions change meaningfully with rolling context?
 
 Phase 2: Reflection Model Call
   - reflections table
@@ -354,9 +448,11 @@ Phase 3: News-to-Market Impact Tracking
 ### Dependencies
 
 - **Dashboard must be built first.** These improvements generate new data (reflections, impact scores, context clusters) that need visualization to validate.
-- Improvement 2 depends on Improvement 1 (needs news events to compare against).
-- Improvement 3 depends on Improvement 1 (needs `news_events` table with timestamps).
-- Improvement 3's prompt integration depends on 2+ weeks of accumulated data.
+- Phase 0 (historical briefing) is independent and can run immediately — it's a one-time generation.
+- Phase 1 depends on Phase 0 (briefing provides the baseline; rolling context adds recent developments on top).
+- Phase 2 depends on Phase 1 (needs news events to compare against).
+- Phase 3 depends on Phase 1 (needs `news_events` table with timestamps).
+- Phase 3's prompt integration depends on 2+ weeks of accumulated data.
 
 ### Budget Impact
 
