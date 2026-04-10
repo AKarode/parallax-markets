@@ -17,7 +17,7 @@ export interface Prediction {
   direction: string | null
   magnitude_range: string | null
   unit: string | null
-  confidence: string
+  confidence: number
   timeframe: string
   reasoning: string
   evidence: string[]
@@ -51,9 +51,9 @@ export interface MarketsResponse {
 
 export interface Divergence {
   model_id: string
-  prediction: string
+  prediction: Prediction | null
   model_probability: number
-  market_price: number | null
+  market_price: MarketData | null
   market_probability: number | null
   buy_yes_edge: number | null
   buy_no_edge: number | null
