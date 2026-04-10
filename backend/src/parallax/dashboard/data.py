@@ -229,22 +229,18 @@ def get_latest_signals_with_markets(
     Groups by contract_ticker, picks the signal with highest absolute edge per contract.
     """
     rows = conn.execute("""
-        WITH latest_run AS (
-            SELECT run_id FROM signal_ledger
-            WHERE signal IN ('BUY_YES', 'BUY_NO', 'HOLD')
-            ORDER BY created_at DESC LIMIT 1
-        ),
-        latest_signals AS (
+        WITH latest_per_contract AS (
             SELECT
-                s.signal_id, s.contract_ticker, s.model_id, s.proxy_class,
-                s.model_probability, s.effective_edge, s.signal, s.entry_side,
-                s.entry_price, s.model_reasoning, s.created_at,
+                signal_id, contract_ticker, model_id, proxy_class,
+                model_probability, effective_edge, signal, entry_side,
+                entry_price, model_reasoning, created_at,
+                market_yes_price, market_no_price,
                 ROW_NUMBER() OVER (
-                    PARTITION BY s.contract_ticker
-                    ORDER BY ABS(s.effective_edge) DESC NULLS LAST
+                    PARTITION BY contract_ticker
+                    ORDER BY created_at DESC, ABS(effective_edge) DESC NULLS LAST
                 ) AS rn
-            FROM signal_ledger s
-            JOIN latest_run lr ON s.run_id = lr.run_id
+            FROM signal_ledger
+            WHERE signal IN ('BUY_YES', 'BUY_NO', 'HOLD')
         ),
         latest_prices AS (
             SELECT
@@ -256,10 +252,13 @@ def get_latest_signals_with_markets(
         SELECT
             s.signal_id, s.contract_ticker, s.model_id, s.proxy_class,
             s.model_probability, s.effective_edge, s.signal, s.entry_side,
-            s.entry_price, s.model_reasoning,
-            p.yes_price, p.no_price, p.volume, p.best_yes_bid, p.best_yes_ask,
+            COALESCE(s.entry_price, s.market_yes_price) AS entry_price,
+            s.model_reasoning,
+            COALESCE(p.yes_price, s.market_yes_price) AS yes_price,
+            COALESCE(p.no_price, s.market_no_price) AS no_price,
+            p.volume, p.best_yes_bid, p.best_yes_ask,
             p.best_no_bid, p.best_no_ask, p.source
-        FROM latest_signals s
+        FROM latest_per_contract s
         LEFT JOIN latest_prices p
             ON p.ticker = s.contract_ticker AND p.rn = 1
         WHERE s.rn = 1

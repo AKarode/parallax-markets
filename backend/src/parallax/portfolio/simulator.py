@@ -63,6 +63,12 @@ class PortfolioSimulator:
                 entry_side = agg["entry_side"]
                 entry_price = agg["entry_price"]
 
+                # Fallback: use market price when entry_price is missing
+                if entry_price is None and entry_side is not None:
+                    fallback = agg.get("market_yes_price") if entry_side == "yes" else agg.get("market_no_price")
+                    if fallback is not None and 0 < fallback < 1:
+                        entry_price = fallback
+
                 if combined_signal == "HOLD" or entry_price is None or entry_side is None:
                     continue
 
@@ -231,16 +237,25 @@ class PortfolioSimulator:
         }
 
     def _load_signals(self) -> list[dict[str, Any]]:
-        """Load all signals from signal_ledger ordered chronologically."""
+        """Load all signals from signal_ledger, with market price fallback."""
         rows = self._conn.execute("""
+            WITH latest_mp AS (
+                SELECT ticker,
+                       yes_price, no_price,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY fetched_at DESC) AS rn
+                FROM market_prices
+            )
             SELECT
-                signal_id, run_id, created_at, model_id,
-                contract_ticker, proxy_class, model_probability,
-                effective_edge, signal, entry_side, entry_price,
-                resolution_price, resolved_at, model_was_correct,
-                market_yes_price, market_no_price
-            FROM signal_ledger
-            ORDER BY created_at ASC, signal_id ASC
+                s.signal_id, s.run_id, s.created_at, s.model_id,
+                s.contract_ticker, s.proxy_class, s.model_probability,
+                s.effective_edge, s.signal, s.entry_side, s.entry_price,
+                s.resolution_price, s.resolved_at, s.model_was_correct,
+                COALESCE(s.market_yes_price, mp.yes_price) AS market_yes_price,
+                COALESCE(s.market_no_price, mp.no_price) AS market_no_price
+            FROM signal_ledger s
+            LEFT JOIN latest_mp mp
+                ON mp.ticker = s.contract_ticker AND mp.rn = 1
+            ORDER BY s.created_at ASC, s.signal_id ASC
         """).fetchall()
 
         columns = [
@@ -305,6 +320,9 @@ class PortfolioSimulator:
             best_entry_side = None
             resolution_price = None
 
+            market_yes = None
+            market_no = None
+
             for sig in sigs:
                 weight = hit_rates.get(
                     (sig["model_id"], sig["proxy_class"]),
@@ -315,12 +333,20 @@ class PortfolioSimulator:
                 weighted_edge += weight * edge
 
                 # Use the entry info from any BUY signal
-                if sig["signal"] in ("BUY_YES", "BUY_NO") and sig["entry_price"] is not None:
-                    best_entry_price = sig["entry_price"]
-                    best_entry_side = sig["entry_side"]
+                if sig["signal"] in ("BUY_YES", "BUY_NO"):
+                    if sig["entry_price"] is not None:
+                        best_entry_price = sig["entry_price"]
+                    # Infer entry_side from signal if not explicitly set
+                    best_entry_side = sig["entry_side"] or ("yes" if sig["signal"] == "BUY_YES" else "no")
 
                 if sig["resolution_price"] is not None:
                     resolution_price = sig["resolution_price"]
+
+                # Capture market prices for fallback
+                if sig.get("market_yes_price") is not None:
+                    market_yes = sig["market_yes_price"]
+                if sig.get("market_no_price") is not None:
+                    market_no = sig["market_no_price"]
 
             combined_edge = weighted_edge / total_weight if total_weight > 0 else 0.0
 
@@ -335,6 +361,8 @@ class PortfolioSimulator:
                 "entry_side": best_entry_side,
                 "entry_price": best_entry_price,
                 "resolution_price": resolution_price,
+                "market_yes_price": market_yes,
+                "market_no_price": market_no,
             }
 
         return aggregated

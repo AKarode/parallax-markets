@@ -137,9 +137,21 @@ app = FastAPI(title="Parallax", version="1.0.0", lifespan=lifespan)
 @app.get("/api/health")
 async def health():
     """Return pipeline status: last fetch times, budget stats, trade count."""
+    # Pull last run time from DB (covers CLI cron runs, not just API calls)
+    last_brief = app.state.last_brief_time
+    if last_brief is None:
+        try:
+            row = app.state.db.execute(
+                "SELECT MAX(started_at) FROM runs",
+            ).fetchone()
+            if row and row[0] is not None:
+                last_brief = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
+        except Exception:
+            pass
+
     return {
         "status": "healthy",
-        "last_brief_time": app.state.last_brief_time,
+        "last_brief_time": last_brief,
         "predictions_count": len(app.state.last_predictions),
         "markets_count": len(app.state.last_markets),
         "divergences_count": len(app.state.last_divergences),
