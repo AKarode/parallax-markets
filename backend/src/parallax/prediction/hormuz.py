@@ -211,5 +211,7 @@ class HormuzReopeningPredictor:
             return "No market prices available."
         lines = []
         for mp in market_prices:
-            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {mp['yes_price']:.0%}")
+            price = mp.get("derived_yes_price") or mp.get("yes_price")
+            price_str = f"{price:.0%}" if price is not None else "N/A"
+            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {price_str}")
         return "\n".join(lines)
