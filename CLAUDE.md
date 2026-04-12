@@ -36,12 +36,15 @@ python -m parallax.cli.brief --scorecard --date 2026-04-09
 
 # FastAPI server
 uvicorn parallax.main:app --reload
+
+# Dashboard (React SPA, proxies /api to backend)
+cd frontend && npm run dev  # port 3000
 ```
 
 ### Constraints
 
 - **Budget**: $20/day cap on LLM calls — 3 Sonnet calls ~$0.02/run, massive headroom
-- **Tech stack**: Python/FastAPI backend, DuckDB — established. Frontend minimal (CLI-first).
+- **Tech stack**: Python/FastAPI backend, DuckDB, React/Vite/TypeScript dashboard.
 - **Data sources**: Google News RSS (free, 5-15min), GDELT DOC API (free, 15-60min), EIA API v2, Kalshi API, Polymarket API
 - **Deployment**: Docker Compose locally — no cloud infra for v1
 - **Timeline**: 2-week ceasefire window (April 7-21 2026) is the validation deadline
@@ -115,8 +118,8 @@ EIA_API_KEY              # Optional — EIA oil price data
 - `PARALLAX_ADMIN_PASSWORD` - Admin authentication password (default: `admin`)
 - `PARALLAX_INVITE_SEED` - Seed for invitation token generation (default: `dev-seed`)
 - Scenario config: `backend/config/scenario_hormuz.yaml`
-- No Vite config file detected in frontend (using defaults)
-- No TypeScript config detected (tsconfig.tsbuildinfo present from previous build)
+- Vite config: `frontend/vite.config.ts` (proxy /api to localhost:8000)
+- TypeScript config: `frontend/tsconfig.json`
 ## Platform Requirements
 - Docker + Docker Compose (for containerized dev environment)
 - Python 3.12 runtime with build tools (gcc, make)
@@ -227,7 +230,7 @@ EIA_API_KEY              # Optional — EIA oil price data
 | Module | Purpose | Key Classes/Functions |
 |--------|---------|---------------------|
 | `cli/brief.py` | **Main entry point** — daily brief + scorecard CLI | `run_brief()`, `_run_scorecard()`, `--scorecard --date` |
-| `main.py` | FastAPI REST API (6 endpoints) | `/api/health`, `/api/predictions`, `/api/markets`, `/api/divergences`, `/api/trades`, `/api/brief/run` |
+| `main.py` | FastAPI REST API (14 endpoints) | `/api/health`, `/api/predictions`, `/api/markets`, `/api/divergences`, `/api/trades`, `/api/brief/run`, `/api/scorecard`, `/api/contracts`, `/api/signals`, `/api/edge-decay`, `/api/price-history`, `/api/prediction-history`, `/api/portfolio`, `/api/latest-signals` |
 | `ingestion/google_news.py` | Google News RSS poller (free, 5-15min) | `fetch_google_news()`, `NewsEvent` |
 | `ingestion/gdelt_doc.py` | GDELT DOC 2.0 API poller (free, 15-60min) | `fetch_gdelt_docs()` |
 | `ingestion/oil_prices.py` | EIA API v2 fetcher (Brent/WTI) | `fetch_brent()`, `fetch_wti()` |
@@ -253,6 +256,8 @@ EIA_API_KEY              # Optional — EIA oil price data
 | `scoring/resolution.py` | Settlement polling + outcome backfill | `check_resolutions()` |
 | `scoring/scorecard.py` | **Daily scorecard ETL** — 15+ metrics across 5 categories | `compute_daily_scorecard()` |
 | `portfolio/allocator.py` | Quarter-Kelly position sizing | `PortfolioAllocator` |
+| `portfolio/simulator.py` | **Portfolio simulator** — replays signal_ledger with weighted ensemble | `PortfolioSimulator`, `run()` |
+| `dashboard/data.py` | Dashboard query layer (13 functions) | `get_scorecard_metrics()`, `get_latest_signals_with_markets()`, `get_prediction_history()` |
 | `budget/tracker.py` | $20/day LLM budget + cost persistence | `BudgetTracker` (writes to `llm_usage`) |
 | `ops/alerts.py` | Alert dispatcher with DuckDB + webhook sinks | `AlertDispatcher`, `DuckDBAlertSink` |
 | `ops/runtime.py` | Runtime config (data/execution environment) | `RuntimeConfig`, `resolve_runtime_config()` |
