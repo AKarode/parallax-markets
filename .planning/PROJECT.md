@@ -8,21 +8,20 @@ A prediction market edge-finder for the Iran-Hormuz crisis. Ingests real-world n
 
 Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects (blockade -> flow -> price -> insurance) faster and deeper than headline-scraping bots.
 
-## Current Milestone: v1.3 Daily Feedback Loop + Scorecard
+## Current Milestone: v1.4 Model Intelligence + Resolution Validation
 
-**Goal:** Build automated daily telemetry, scoring, and feedback so the system can measure and improve its own forecasting and trading performance — safely, with statistical rigor.
+**Goal:** Discover the full contract landscape, build models that directly map to real contracts, fix prompt issues, fill context gaps, diversify news sources, and validate the hold-to-settlement thesis via resolution backtesting.
 
 **Target features:**
-- `runs` table for run-level metadata (pipeline health SLO)
-- `daily_scorecard` table + ETL computing 10-20 metrics across Signal Quality, Execution Quality, Portfolio/Risk, Data Quality, Ops/Runtime
-- `ops_events` table persisting structured alerts from AlertDispatcher
-- `llm_usage` table persisting per-call token/cost data from BudgetTracker
-- Brier score and calibration diagnostics (reliability curves, decomposition)
-- Alert thresholds with safe auto-actions (tighten gates only, never loosen)
-- Minimal dashboard + `/api/scorecard` endpoint
-- Champion/challenger experiment tags across prediction_log, signal_ledger, trade_orders
-- Bounded parameter update engine (min_edge tightening, cost model updates from realized slippage)
-- Sequentially valid inference for online monitoring (always-valid methods)
+- Contract discovery: pull all child contracts from Kalshi API for 12 event tickers, catalog resolution criteria, settlement status, volume/liquidity
+- Model-contract alignment: fix proxy classifications, register all actionable contracts, add "Iran political transition" model for regime-change contracts
+- Model registry: refactor brief.py from hardcoded 3-model calls to registry pattern (models as data)
+- Prompt optimization: remove market price anchoring, fix Hormuz dual-probability spec, fix bypass_flow=0, separate facts from hypothesis injection, track record sample size guards
+- Unified ensemble: live signals and simulator use same weighted aggregation logic
+- Pre-crisis context: research and write Aug 2025 → Feb 2026 escalation gap, convert to file-based context system
+- Rolling daily context: auto-append structured JSON per cron run, 5-day rolling window with self-correction
+- News diversification: Reuters/AP RSS, journalist Twitter/X lists, oil-specific feeds, replace dead GDELT
+- Resolution backtest: run improved models against settled contracts, score against actual settlement outcomes
 
 ## Requirements
 
@@ -71,6 +70,9 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 - Historical replay UI (backend supports replay mode but no UI needed)
 - Deployment hardening / API hydration (deferred from v1.2 -- CLI-first, not serving a frontend)
 - Second thesis expansion (deferred from v1.2 -- must prove edge on first thesis before expanding)
+- Active exit/sell trading (fee math kills it -- round-trip 5.5c vs hold-to-settlement 2.8c)
+- Contract-first architecture (deferred to v2.0 -- current model registry pattern sufficient for Iran domain)
+- v1.3 Daily Feedback Loop + Scorecard (deprioritized -- model intelligence has higher ROI than telemetry at current data sparsity)
 
 ## Context
 
@@ -104,6 +106,9 @@ Find mispriced prediction market contracts on Iran war outcomes by reasoning abo
 | Paper trading first | Prove edge before risking capital. Kalshi sandbox is free. | Good |
 | Cascade engine retained | 6-rule parameterized cascade (blockade -> flow -> bypass -> price -> downstream -> insurance) provides second-order reasoning that prediction models use | Good |
 | Anthropic prompt caching | Sonnet-only now, 3 deep calls per run. ~$0.02/run vs $20/day budget. | Good |
+| Hold-to-settlement over active exits | Round-trip fees 5.5c vs 2.8c hold-to-settlement. Fee math kills active trading. | Good |
+| v1.3 deprioritized for v1.4 | Model intelligence (context gaps, prompt fixes, contract alignment) has higher ROI than telemetry at current data sparsity | Pending |
+| Hybrid model architecture | Keep specialized models (cascade/flow preprocessing) + add generic political model + model registry in brief.py. Contract-first arch deferred to v2.0. | Pending |
 
 ## Evolution
 
@@ -123,4 +128,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-09 after milestone v1.3 start (daily feedback loop + scorecard)*
+*Last updated: 2026-04-12 after milestone v1.4 start (model intelligence + resolution validation)*
