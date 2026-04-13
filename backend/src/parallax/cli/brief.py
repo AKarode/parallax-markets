@@ -471,6 +471,16 @@ async def run_brief(
         config = _load_config()
         cascade = CascadeEngine(config=config)
         world_state = WorldState()
+        # Initialize Hormuz with current blockade conditions
+        # ~2M bbl/day trickle flow (10% of 20M pre-war capacity)
+        # Based on crisis context: "8 ships in 2 days vs 100+/day pre-war"
+        world_state.update_cell(
+            cell_id=1,
+            influence="iran",
+            threat_level=0.9,
+            flow=2_000_000,
+            status="blocked",
+        )
         events, prices, kalshi_markets, poly_markets = await asyncio.gather(
             _fetch_gdelt_events(),
             _fetch_oil_prices(),

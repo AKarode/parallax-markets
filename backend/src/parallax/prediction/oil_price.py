@@ -85,7 +85,6 @@ class OilPricePredictor:
 
         # Step 1: Cascade analysis
         supply_loss = 0.0
-        bypass_flow = 0.0
         price_shock_pct = 0.0
 
         # Find Hormuz cells and compute disruption
@@ -93,6 +92,10 @@ class OilPricePredictor:
             if cell_data.get("status") in ("blocked", "restricted"):
                 result = self._cascade.apply_blockade(world_state, cell_id, 0.5)
                 supply_loss += result.get("supply_loss", 0.0)
+
+        # Compute bypass flow from cascade engine
+        bypass_result = self._cascade.activate_bypass(supply_loss)
+        bypass_flow = bypass_result["bypass_flow"]
 
         if supply_loss > 0:
             current_price = self._get_current_brent(current_prices)
