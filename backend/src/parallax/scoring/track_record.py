@@ -46,6 +46,8 @@ def build_track_record(model_id: str, conn: duckdb.DuckDBPyConnection) -> str:
         return _NO_DATA_TEXT
 
     total = int(row[0])
+    if total < 10:
+        return f"Track record: {total} resolved signal(s) -- too few for reliable statistics (minimum 10 required)."
     correct = int(row[1])
     hit_rate = correct / total
 

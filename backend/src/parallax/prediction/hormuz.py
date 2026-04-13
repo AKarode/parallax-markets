@@ -20,12 +20,12 @@ from parallax.simulation.world_state import WorldState
 
 logger = logging.getLogger(__name__)
 
-HORMUZ_SYSTEM_PROMPT = """You are a maritime security analyst. Given the current Hormuz strait status and recent events, estimate reopening probabilities.
+HORMUZ_SYSTEM_PROMPT = """You are a maritime security analyst. Given the current Hormuz strait status and recent events, estimate the probability of partial reopening.
 
 Current status:
 {flow_data}
 
-Scenario analysis:
+Scenario analysis (for context -- shows sensitivity to different reopening levels):
 - 25% reopening: supply recovery = {recovery_25:.0f} bbl/day
 - 50% reopening: supply recovery = {recovery_50:.0f} bbl/day
 - 100% reopening: supply recovery = {recovery_100:.0f} bbl/day
@@ -36,11 +36,7 @@ Recent events:
 ## YOUR TRACK RECORD
 {track_record}
 
-Consider what the market may already be pricing in and where it might be wrong.
-
-Estimate:
-(a) Probability of partial reopening (>25% flow restored) within 14 days
-(b) Probability of full reopening within 30 days
+Estimate ONE probability: the likelihood of partial reopening (>25% of pre-war commercial shipping flow restored through the Strait of Hormuz) within 14 days.
 
 Output ONLY valid JSON (no markdown):
 {{
@@ -48,7 +44,7 @@ Output ONLY valid JSON (no markdown):
   "confidence": <float 0-1, how confident you are in this estimate>,
   "direction": "<increase|decrease|stable>",
   "magnitude_range": [<low_pct_reopening>, <high_pct_reopening>],
-  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what the market may be missing, second-order effects, and key uncertainties>",
+  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what factors drive reopening likelihood, second-order effects, and key uncertainties>",
   "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>", "...(3-5 total)"]
 }}"""
 
