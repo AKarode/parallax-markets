@@ -1,394 +1,532 @@
-# Domain Pitfalls
+# Domain Pitfalls: v1.4 Model Intelligence + Resolution Validation
 
-**Domain:** Geopolitical crisis simulation with real-time intelligence, LLM agent swarm, and prediction evaluation
+**Domain:** Adding model intelligence, contract discovery, news diversification, and resolution backtesting to an existing prediction market edge-finder
 **Project:** Parallax
-**Researched:** 2026-03-30
+**Researched:** 2026-04-12
+**Overall Confidence:** HIGH (grounded in direct codebase analysis + verified domain research)
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause rewrites, data loss, or fundamentally broken simulation output.
+Mistakes that cause wrong predictions, bad trades, or require significant rework.
 
 ---
 
-### Pitfall 1: Silent State Divergence Between In-Memory and Persisted World State
+### Pitfall C-1: Market Price Anchoring Bias in LLM Prompts
 
-**What goes wrong:** The `WorldState` flushes deltas and immediately clears its dirty set (line 73 of `world_state.py`) without confirming the `DbWriter` actually persisted them. Meanwhile, `DbWriter` swallows all exceptions (line 45-46 of `writer.py`). The simulation continues running with in-memory state that has no durable backing. After a crash or restart, checkpoint/restore loads stale or incomplete state. The analyst sees predictions based on a world state that no longer matches what was recorded.
+**What goes wrong:** All 3 prediction model prompts currently inject current market prices _before_ asking the model "what is the market missing?" Research confirms LLMs exhibit anchoring bias in 17.8-57.3% of instances -- the model locks onto initial parameters and rarely challenges them. The oil_price prompt (line 37 of oil_price.py) includes `Current market prices: {market_prices_text}` followed by `Consider what the market may already be pricing in`. The ceasefire and hormuz prompts have the identical pattern. The LLM reads market YES at 48%, then outputs 45-52% -- never deviating far because it is cognitively anchored to the number it just read.
 
-**Why it happens:** The flush-then-clear pattern is natural for in-memory caches. The danger is invisible until a restart occurs, because in-memory state looks correct while the process is alive. DuckDB write failures are rare enough that the bare `except Exception` never fires during development -- but under load (queue backpressure, disk full, concurrent connection issues), they will.
+**Why it happens:** The prompts were designed with good intent -- "tell the model what the market thinks so it can spot disagreements." But LLM anchoring research (2025 ACL, Springer) shows this is backwards: providing the anchor constrains the output. Reasoning models are less prone to anchoring when given a long chain of thought, but the prompts request 500-1000 words of reasoning _after_ the anchor is injected, not before.
 
 **Consequences:**
-- Predictions scored against corrupted world state produce meaningless eval results
-- Snapshot/restore puts the simulation into an impossible state (e.g., blockade active but flow unchanged)
-- The analyst trusts outputs that diverged from recorded ground truth days ago
-- Debugging requires replaying the full event journal, which may itself be incomplete
+- Model predictions cluster near market prices, producing tiny edges that are eaten by fees (2.8c hold-to-settlement cost)
+- The system generates HOLD signals for 80%+ of contracts because divergences never exceed the 5% minimum edge threshold
+- The entire value proposition (reasoning deeper than headline bots) is nullified because the model is just parroting the market price it was shown
 
 **Warning signs:**
-- `DbWriter` queue depth grows monotonically during a run
-- `get_world_state_at_tick()` returns different values than `WorldState.snapshot()` for the same tick
-- After restart, agent decisions reference cells/states that don't exist in the database
+- Model probability within +/-5% of market price on >70% of predictions
+- Edge distribution heavily clustered at 0-3% (below fee threshold)
+- Backtest results show model predictions track market prices rather than leading them
 
 **Prevention:**
-1. Add write-acknowledgment: `flush_deltas()` returns a future/callback; dirty set clears only after DB confirmation
-2. Replace bare `except Exception` in `DbWriter` with specific handlers; re-raise on critical failures
-3. Add a periodic consistency check: reconstruct state from DB every N ticks, compare to in-memory state, halt if diverged
-4. Implement a dead-letter queue for failed writes with retry and disk overflow
+1. Remove market prices from prediction prompts entirely. Let models reason independently first
+2. If market context is needed, inject it _after_ the model has committed to a probability: "You predicted X%. The market says Y%. Would you revise?" as a separate follow-up call
+3. Add an anchoring detection metric: correlate model output probability with market price input across runs. If correlation > 0.7, the model is anchored
+4. For the backtest engine, verify that removing market prices changes model outputs -- if removing them does NOT change outputs, the anchoring was minimal and this pitfall is less severe than expected
 
-**Which phase should address it:** First integration phase. This is a prerequisite before wiring any live data through the pipeline. If the persistence layer is unreliable, every downstream component (eval, frontend, agent memory) builds on sand.
+**Which phase should address it:** Phase 1 (Prompt Optimization). This is the single highest-ROI fix -- it directly affects whether the system generates any tradable edge at all.
 
-**Confidence:** HIGH -- this is directly visible in the current codebase (`writer.py:45-46`, `world_state.py:61-74`) and documented in CONCERNS.md.
+**Confidence:** HIGH -- visible in oil_price.py:37, ceasefire.py:40, hormuz.py:48 (all inject `{market_prices_text}`). Anchoring research confirmed via ACL 2025 paper and Springer 2025 study.
 
 ---
 
-### Pitfall 2: LLM Budget Exhaustion Halts the Entire Pipeline Mid-Day
+### Pitfall C-2: Hypothesis Injection Masquerading as Context
 
-**What goes wrong:** The $20/day budget cap is a hard constraint. With 50 agents, each making Haiku calls (~$0.003-0.01 per call), a single full sweep costs $0.15-$0.50. But during a crisis spike (e.g., IRGC seizure of a tanker), GDELT ingests dozens of high-relevance events in a short window. The event-to-agent router fans out each event to multiple agents. If a 4-hour crisis spike triggers 15 events routed to an average of 10 agents each, that is 150 LLM calls in a burst -- potentially $3-7 including any Sonnet escalations. A few such bursts and the daily budget is exhausted by noon, leaving the simulation blind for the rest of the day -- exactly when the crisis is still unfolding.
+**What goes wrong:** `crisis_context.py` ends with a section titled "What The Market May Be Missing" (lines 117-125) that contains 5 editorial opinions:
+- "Pakistan talks produced no agreement after 21 hours -- market may be slow to price in failure"
+- "Hormuz 'reopening' is theater -- 8 ships vs 100+/day pre-war"
+- "Ceasefire window is only 10 days -- pressure mounts daily"
+- "Iran's 10-point counterproposal includes sanctions relief -- very ambitious asks"
+- "Even if ceasefire holds, formal agreement is a much higher bar"
 
-**Why it happens:** Budget tracking operates per-call but the cost driver is event volume, which is bursty and unpredictable. Auto-degrade (Sonnet to Haiku fallback) reduces per-call cost but not call volume. No mechanism exists to throttle call volume itself.
+These are conclusions, not facts. They pre-load the model's reasoning direction. Combined with the market price anchoring (C-1), the model is told both WHAT the market thinks AND what it SHOULD think differently. The "independent reasoning" step is illusory.
+
+**Why it happens:** The analyst who wrote the context naturally included their own analysis alongside the facts. The line between "critical context Claude needs" and "conclusions Claude should reach independently" was not drawn.
 
 **Consequences:**
-- Simulation goes dark during the most analytically valuable period
-- Predictions become stale; eval scores reflect budget gaps, not model quality
-- The analyst loses trust in the tool at exactly the moment it should be most useful
+- All 3 models converge on the same editorial viewpoint because they share the same injected hypothesis
+- Model diversity (the reason for having 3 models) is destroyed -- they are 3 copies of the same opinion, not 3 independent perspectives
+- When the analyst's hypothesis is wrong (e.g., market correctly prices the talk failure), all 3 models are wrong in the same direction
+- No error-correcting benefit from the ensemble because errors are correlated
 
 **Warning signs:**
-- Budget consumption rate exceeds $2/hour during any window
-- More than 20 agent calls dispatched within a single tick
-- Budget tracker enters cooldown mode before 6pm
+- All 3 models cite the same reasoning themes in their output
+- Model predictions move in the same direction for unrelated contracts (ceasefire and oil both shift bearish because of the same injected hypothesis)
+- Removing the "What The Market May Be Missing" section changes all 3 models' outputs in the same direction
 
 **Prevention:**
-1. Implement event-level budget gating: before routing an event to N agents, estimate total cost and decide how many agents actually need to respond. Not every event needs all 50 agents.
-2. Add priority tiers to the event-to-agent router: critical events (Goldstein > 7) get full agent sweep; routine events get top-5 relevant agents only
-3. Implement hourly budget pacing: divide $20 into hourly buckets (e.g., $1/hour baseline, $3 reserve for spikes). Don't allow a single hour to consume more than 25% of daily budget.
-4. Cache agent context aggressively: if an agent was just called 2 ticks ago with similar context, skip or use cached reasoning with a brief delta prompt
+1. Split crisis_context.py into FACTS (timeline, prices, contract definitions) and ANALYSIS (hypotheses, opinions). Only inject FACTS into model prompts
+2. If analysis is useful, create model-specific analysis. The oil model should get oil-specific analysis; the ceasefire model should get diplomacy-specific analysis. Never share the same editorial across all models
+3. Add a peer-review step: before updating crisis_context.py, tag each bullet as FACT or OPINION. Only FACT bullets go in the base context
+4. Test for hypothesis leakage: run models with and without the analysis section. If removing it changes the output direction, the model was anchored to the hypothesis
 
-**Which phase should address it:** Must be solved during the pipeline wiring phase, specifically when connecting GDELT ingestion to the agent runner. The router is the control point.
+**Which phase should address it:** Phase 1 (Prompt Optimization), immediately after C-1. Facts go in context files; opinions stay out.
 
-**Confidence:** HIGH -- the budget constraint ($20/day) and agent count (50) are documented in PROJECT.md. The math on burst costs is straightforward.
+**Confidence:** HIGH -- directly visible in crisis_context.py lines 117-125. The "What The Market May Be Missing" header literally labels the content as editorial.
 
 ---
 
-### Pitfall 3: Cascade Feedback Loops Produce Unrealistic Runaway Scenarios
+### Pitfall C-3: Split-Brain Aggregation Between Live Signals and Backtest Simulator
 
-**What goes wrong:** The cascade engine applies rules sequentially and statefully: blockade reduces flow, flow loss triggers price shock, price shock triggers downstream effects, downstream effects inform agent decisions, agent decisions trigger new blockades or escalations. Without sufficient damping, the simulation spirals: a moderate blockade event produces a catastrophic price spike, which triggers extreme agent responses, which produce more escalation, which overrides the circuit breaker via "exogenous shock" loophole. Within a few ticks, oil is at the $300 ceiling and every agent is at maximum escalation.
+**What goes wrong:** `brief.py` (live pipeline) and `simulator.py` (backtest) both aggregate signals from multiple models into trading decisions, but they use completely different logic:
 
-**Why it happens:** The PRICE_ELASTICITY of 3.0 means a 10% supply loss produces a 30% price jump. If an agent responds by escalating (increasing blockade severity), the next tick compounds: 20% loss produces 60% price jump. The circuit breaker has a loophole: events with high Goldstein scores bypass all limits (line 45 of `circuit_breaker.py`). Agent-generated escalations that coincide with real high-Goldstein events get free passes. Additionally, the cascade engine has no rollback (CONCERNS.md: "applies rules statefully without rollback") -- partial failures leave the world in an inconsistent intermediate state.
+- **brief.py**: Iterates through predictions, maps each to contracts via MappingPolicy, records individual signals, applies oil deconfliction, then feeds to Kelly allocator. Signals are evaluated independently per model-contract pair. No weighted ensemble.
+- **simulator.py**: Groups signals by run_id, then calls `_aggregate_signals()` which does weighted-average ensemble by hit rate: `combined_edge = sum(weight * edge) / total_weight`. Signals that individually would be HOLD can become BUY if their weighted average clears the threshold.
+
+The two paths can produce different trade decisions on the same underlying data. A contract that gets HOLD in the live pipeline could get BUY in the simulator, or vice versa.
+
+**Why it happens:** The simulator was built after the live pipeline, during the backtest phase, to support a new aggregation strategy. The live pipeline was not updated to match. The two evolved independently.
 
 **Consequences:**
-- Simulation outputs are so extreme they are useless for analysis
-- The analyst dismisses the tool as broken
-- Predictions are systematically biased toward extreme outcomes, ruining eval scores
-- No way to recover without manual intervention or restart
+- Backtest results do not predict live performance because they use different decision logic
+- The system has two "sources of truth" for what constitutes a tradable signal
+- Any improvement to one path (e.g., fixing aggregation weights) must be manually replicated in the other
+- Validation of the hold-to-settlement thesis via backtesting is unreliable because the simulated portfolio uses different entry criteria than live would
 
 **Warning signs:**
-- Oil price hits ceiling within 5 ticks of a blockade event
-- More than 3 agents escalate in the same tick
-- Circuit breaker override fires more than once per day
+- Backtest shows positive P&L but live pipeline generates mostly HOLD signals (or vice versa)
+- Edge thresholds differ: simulator uses 5% (EDGE_THRESHOLD constant), live pipeline uses MappingPolicy's min_effective_edge_pct (also 5%, but after different cost deductions)
+- Simulator uses a fixed DEFAULT_HIT_RATE=0.5 fallback; live pipeline has no such concept
 
 **Prevention:**
-1. Add cumulative damping to cascade rules: each successive tick of escalation has diminishing marginal effect (e.g., multiply PRICE_ELASTICITY by 0.8 per consecutive escalation tick)
-2. Separate the exogenous shock override from agent-initiated escalations: real-world events bypass the breaker, but the cascade effects they produce should still be subject to rate limiting
-3. Implement cascade transaction boundaries: compute all rule outputs as deltas first, validate the total delta against reality bounds (circuit breaker's `reality_check`), then apply atomically or reject
-4. Add a global escalation velocity metric: if total escalation across all agents exceeds a threshold per tick, force a cooldown regardless of individual agent state
-5. Make PRICE_ELASTICITY and INSURANCE_THREAT_MULTIPLIER config-driven (currently hardcoded -- documented in CONCERNS.md) so they can be tuned without code changes
+1. Extract the aggregation logic into a shared module that both brief.py and simulator.py import
+2. Define the canonical signal-to-trade path once: prediction -> mapping -> signal -> aggregation -> sizing -> trade. Both live and backtest must use this exact path
+3. Add an integration test that feeds the same predictions through both paths and asserts identical trade decisions
+4. When refactoring to model registry pattern, make aggregation part of the registry, not a separate concern in each entry point
 
-**Which phase should address it:** Must be addressed before the end-to-end pipeline goes live. The cascade engine and circuit breaker need hardening before agents are connected. Specifically: (a) cascade transaction boundaries in the simulation engine phase, (b) escalation velocity limits when wiring agents to cascade.
+**Which phase should address it:** Phase 2 (Unified Ensemble). This must be solved before running resolution backtests, otherwise backtest results are meaningless for predicting live performance.
 
-**Confidence:** HIGH -- visible in cascade.py (PRICE_ELASTICITY=3.0, no damping), circuit_breaker.py (exogenous override bypasses all limits), and CONCERNS.md (stateful mutation without rollback).
+**Confidence:** HIGH -- directly visible in brief.py lines 537-559 vs simulator.py lines 305-369. The code paths are completely different.
 
 ---
 
-### Pitfall 4: GDELT Noise Overwhelms the Signal Pipeline
+### Pitfall C-4: Lookahead Bias in Resolution Backtesting
 
-**What goes wrong:** GDELT ingests global events at 15-minute cadence. Even with the 4-stage noise filter and semantic dedup at 0.90 threshold, a major geopolitical event generates hundreds of articles across sources, each slightly different. The dedup catches exact/near duplicates, but GDELT also produces structurally distinct events about the same incident (e.g., "Iran seizes tanker" vs "UK condemns tanker seizure" vs "Oil prices surge after tanker seizure"). These pass dedup but represent the same underlying incident from different angles. Each gets routed to agents as a separate event, causing: (a) redundant LLM calls, (b) agents weighting the same incident multiple times in their reasoning, (c) budget burn on reprocessing.
+**What goes wrong:** The backtest engine (backtest/engine.py) builds "date-limited context" using a timeline.json file that was written with full knowledge of how events unfolded. Even though the code truncates the timeline at the test date (line 69: `if entry["date"] <= as_of_date`), the timeline entries themselves were written with hindsight. For example, an entry for April 3 might say "F-15E shot down over Iran" -- but in real time on April 3, the full picture (pilot rescued, WSO missing 48hrs) wasn't known for hours or days.
 
-**Why it happens:** Semantic dedup at 0.90 catches paraphrases but not perspective shifts. GDELT's Goldstein scale and actor codes differ across these articles, so structural dedup misses them too. The "same incident, different angle" problem is fundamental to news data and is not solved by pairwise similarity alone.
+Additionally, the backtest monkey-patches `crisis_context.get_crisis_context` (line 203-205), but the date-limited context includes the "Prediction Market Contract Context" section (line 102-106) with prices that reflect aggregate knowledge ("WTI max >$140 at ~42%"). If these market-level summaries were not available on the test date, this is information leakage.
+
+**Why it happens:** It is extremely difficult to reconstruct "what was known at time T" from post-hoc summaries. The backtest engine makes a good-faith effort with date filtering, but the content quality of each entry carries unavoidable hindsight.
 
 **Consequences:**
-- Agent reasoning is biased toward whatever event generates the most articles (media attention bias, not geopolitical significance)
-- Budget consumed on redundant calls
-- The simulation overweights media-friendly events and underweights quietly significant developments
+- Backtest results are optimistically biased -- the model performs better in backtests than it would have in real time because it has cleaner, more complete context
+- Win rates and P&L from backtests overestimate real-world performance
+- The validation window (April 7-21) produces false confidence in model accuracy
 
 **Warning signs:**
-- More than 10 curated events in a single 15-minute window referencing the same actors
-- Agent decisions in consecutive ticks cite nearly identical reasoning
-- Event relevance scores cluster tightly for a batch (all high or all medium)
+- Backtest accuracy significantly exceeds live accuracy on the same time period
+- Model reasoning in backtests cites facts that were not publicly available at the test date
+- Backtest P&L is positive but live P&L is negative or flat
 
 **Prevention:**
-1. Add incident-level clustering on top of semantic dedup: group curated events by (actor1, actor2, action_category, time_window) and emit one representative event per cluster with a `mention_count` field
-2. Weight agent routing by incident, not by event: one incident = one agent activation cycle, regardless of how many GDELT articles describe it
-3. Add a "novelty score" to curated events: how different is this from the last 6 hours of events? Low-novelty events get batched for a periodic summary rather than routed individually
-4. Tune the semantic dedup threshold down to 0.85 for same-actor pairs (events about the same actors within the same hour are likely about the same incident even at lower similarity)
+1. For each timeline entry, add a `known_at` timestamp (when the information was first publicly reported, not when the event occurred). Filter on `known_at <= as_of_date`, not `date <= as_of_date`
+2. Source timeline entries from archived news snapshots (Google News RSS at time T, Internet Archive), not from retrospective summaries
+3. Remove the "Prediction Market Contract Context" section from backtest context entirely -- or replace with actual market prices on that date (which the backtest already has in backtest_prices.json)
+4. Add a "hindsight audit" step: for each backtest day, compare the context the model received vs. what a human analyst with only a news RSS feed would have known. Flag discrepancies
+5. Score backtests conservatively: apply a "hindsight discount" of 10-20% to backtest accuracy when comparing to live performance expectations
 
-**Which phase should address it:** During the GDELT-to-agent-router integration. The clustering layer should sit between ingestion and routing. This is not a GDELT problem or an agent problem -- it is a pipeline design problem at the integration boundary.
+**Which phase should address it:** Phase 5 (Resolution Backtesting). Must be addressed before drawing any conclusions from backtest results.
 
-**Confidence:** MEDIUM -- the 4-stage filter and 0.90 dedup threshold are documented as existing, but the actual false-negative rate on incident-level dedup is unknown without testing against real GDELT data during a crisis spike. The architectural problem (pairwise dedup is insufficient for incident clustering) is well-understood in NLP/IR literature.
+**Confidence:** HIGH -- directly visible in backtest/engine.py. The monkey-patching pattern (line 203-205) and the timeline structure make the lookahead risk architectural.
 
 ---
 
-### Pitfall 5: WebSocket Frontend Drowns in High-Frequency State Updates
+### Pitfall C-5: Hormuz Prompt Asks for Two Probabilities, JSON Captures One
 
-**What goes wrong:** The simulation ticks every 15 minutes in LIVE mode, but each tick can produce dozens of world state deltas, agent decisions, cascade effects, and indicator updates. The frontend receives all of these via WebSocket as JSON batches. During a crisis cascade, a single tick might produce: 50 cell updates + 15 agent decisions + 6 cascade rule outputs + indicator changes = 70+ messages. The frontend attempts to re-render the deck.gl map and update all panels for each batch. The browser freezes, the WebSocket buffer grows, the auto-reconnect fires spuriously, and the user sees a frozen map followed by a jarring state jump.
+**What goes wrong:** The Hormuz prompt (hormuz.py lines 46-47) asks the model to estimate:
+- "(a) Probability of partial reopening (>25% flow restored) within 14 days"
+- "(b) Probability of full reopening within 30 days"
 
-**Why it happens:** The backend pushes state changes as they happen (event-driven), but the frontend is render-bound. deck.gl H3 hex map re-renders are expensive for large cell sets. The WebSocket hook has auto-reconnect but no backpressure or throttling.
+But the JSON output schema (lines 49-55) only has a single `"probability"` field. The model outputs one number, and the code (line 141) captures it as `parsed["probability"]`. The second probability (full reopening within 30 days) is silently discarded -- it may appear in the reasoning text but is never captured as structured data.
 
-**Consequences:**
-- The dashboard becomes unusable during the most interesting moments
-- The analyst misses the cascade as it unfolds because the UI is frozen
-- Auto-reconnect can cause duplicate message processing or state gaps
-
-**Warning signs:**
-- Frontend frame rate drops below 10fps during simulation ticks
-- WebSocket message queue grows beyond 100 pending messages
-- Browser dev tools show "long task" warnings during deck.gl renders
-
-**Prevention:**
-1. Server-side throttling: batch all updates within a tick into a single WebSocket message per tick, not per-update. Send a consolidated "tick summary" frame.
-2. Client-side rendering budget: use `requestAnimationFrame` gating so deck.gl re-renders at most once per frame, accumulating deltas between frames
-3. Differential updates: send only changed cells, not full state. The frontend maintains local state and applies deltas.
-4. Priority channels: separate WebSocket channels (or message types) for map updates vs. agent activity vs. indicators. The frontend can process high-priority updates (indicators, alerts) immediately and batch map updates.
-5. Add explicit backpressure: if the client hasn't acknowledged the last N messages, the server buffers instead of flooding
-
-**Which phase should address it:** During the WebSocket server and frontend wiring phase. The message protocol design must happen before the first real-time data flows to the frontend. Retrofitting throttling into an already-built push pipeline is significantly harder.
-
-**Confidence:** HIGH -- deck.gl rendering costs are well-documented, and the project has 50 agents + multi-resolution H3 grid + cascade rules all producing output simultaneously. The WebSocket hook exists but has no throttling (documented in PROJECT.md).
-
----
-
-### Pitfall 6: Prediction Eval Loop Scores Against Stale or Missing Ground Truth
-
-**What goes wrong:** The eval framework scores predictions against "ground truth" -- but for geopolitical predictions, ground truth is ambiguous, delayed, and often contested. A prediction like "Iran will increase naval patrols in the Strait within 48 hours" requires: (a) a clear definition of what constitutes "increase," (b) a reliable source confirming it happened or didn't, (c) timely availability of that source. GDELT provides event data, but GDELT reports media coverage, not ground truth. EIA provides oil prices (clear ground truth for price predictions) but with 1-week lag on some data series. For military/political predictions, there may be no programmatic ground truth source at all.
-
-**Why it happens:** The prediction schema has `ground_truth JSON` and `resolve_by TIMESTAMP` fields, but no mechanism to populate them automatically. The "daily cron scoring predictions against reality" requirement assumes ground truth is fetchable, but for most geopolitical predictions it requires manual analyst input or inference from downstream indicators.
+**Why it happens:** The prompt was written with a richer output schema in mind, but the JSON format was simplified without updating the prompt text.
 
 **Consequences:**
-- Predictions sit unscored indefinitely, making the eval loop meaningless
-- Automated scoring produces false positives/negatives based on incomplete ground truth
-- Agent prompt refinement based on bad scores makes agents worse, not better
-- The analyst loses trust in the eval system and stops using it
-
-**Warning signs:**
-- More than 50% of predictions past their `resolve_by` date have NULL `ground_truth`
-- Automated scores cluster at 0.0 or 1.0 (binary, no nuance) instead of continuous calibration scores
-- Agent prompt refinement produces agents that game the scoring rubric rather than making better predictions
+- The captured probability is ambiguous: is it partial reopening or full reopening? Different Claude runs may interpret the question differently
+- The Hormuz model produces inconsistent outputs because the prompt and schema disagree
+- The lost second probability (full reopening 30d) could be mapped to a different contract set but isn't
 
 **Prevention:**
-1. Categorize predictions by ground-truth availability at creation time:
-   - **Auto-scorable**: oil price direction/magnitude (EIA data), shipping traffic changes (AIS data if available)
-   - **Semi-auto**: event occurrence (GDELT can confirm media reports of an event, even if not ground truth)
-   - **Manual-only**: military posture changes, diplomatic shifts, intent predictions
-2. Only auto-score the auto-scorable category. Surface manual-only predictions in the analyst dashboard for human scoring.
-3. For the eval-to-prompt-refinement loop, use only high-confidence scored predictions (auto-scored with clear ground truth). Do not feed ambiguous scores into prompt tuning.
-4. Add a "ground truth confidence" field alongside `ground_truth` in the predictions table. Scores weighted by ground truth confidence prevent low-quality scores from polluting the feedback loop.
-5. Start with oil price predictions only for the automated eval loop -- this is the one domain where ground truth is unambiguous and timely.
+1. Either update the JSON schema to capture both probabilities: `"partial_reopening_14d": float, "full_reopening_30d": float`
+2. Or simplify the prompt to ask for exactly one probability that matches the schema
+3. If adding a second probability, update PredictionOutput schema or use the `metadata` field to carry the additional value
+4. Map each probability to its corresponding contract set: partial reopening -> near-term Hormuz contracts, full reopening -> longer-dated contracts
 
-**Which phase should address it:** Eval framework phase. The prediction categorization and ground truth sourcing strategy must be designed before the scoring cron is implemented. Starting with oil-price-only eval is the pragmatic first step.
+**Which phase should address it:** Phase 1 (Prompt Optimization). This is a simple fix but the ambiguity actively degrades prediction quality right now.
 
-**Confidence:** MEDIUM -- the schema and requirements are documented, but the actual ground truth availability for this specific crisis scenario hasn't been tested. The general problem of geopolitical prediction evaluation is well-known in forecasting literature (see: Good Judgment Project, Metaculus scoring challenges).
+**Confidence:** HIGH -- directly visible in hormuz.py prompt text vs JSON schema.
 
 ---
 
 ## Moderate Pitfalls
 
-Mistakes that cause delays, degraded output quality, or significant rework.
+Mistakes that cause degraded signal quality, missed opportunities, or technical debt.
 
 ---
 
-### Pitfall 7: Parallel Feature Branches Create Integration Nightmare
+### Pitfall M-1: bypass_flow Always Zero, Oil Model Biased Toward Total Disruption
 
-**What goes wrong:** PROJECT.md documents "10 feature branches (feat/01 through feat/10) with substantial code, but branches are parallel (not merged together)" with status "Revisit." Each branch developed a subsystem in isolation (ingestion, agents, budget, simulation, frontend, etc.). When wiring them together, interface mismatches emerge: the agent runner expects events in format X, but GDELT ingestion produces format Y. The DbWriter expects to be the sole writer, but two branches both create their own connections. Schema assumptions diverge across branches.
+**What goes wrong:** In oil_price.py, `bypass_flow` is initialized to 0.0 (line 92) and never updated. The cascade engine computes supply_loss from blocked/restricted cells (lines 96-99), but there is no corresponding code to compute bypass flow through alternate routes (Suez, pipelines, SPR releases). The prompt receives `Bypass flow: 0 bbl/day through alternate routes`, telling the LLM that zero oil is flowing through alternatives -- which biases it toward maximum disruption scenarios.
 
-**Why it happens:** Parallel development without integration contracts. Each branch likely tested against its own mocks/stubs that don't match the real interface of the other subsystem.
+**Why it happens:** The cascade engine has bypass computation logic (`compute_bypass_flow` or similar), but the oil_price predictor never calls it. The WorldState has no cells with "bypass" status because the H3 spatial layer was pruned.
+
+**Consequences:**
+- Oil price model systematically overestimates disruption impact
+- Predictions skew bullish on oil, generating BUY_YES signals on KXWTIMAX contracts that may not materialize
+- The cascade analysis provided to the LLM is incomplete -- it sees 2.5M bbl/day disruption with zero mitigation, when in reality 30-50% is bypassed
 
 **Prevention:**
-1. Before merging any branch, define integration contracts: shared Pydantic models for events, decisions, predictions, and world state updates that all subsystems import from a common module
-2. Merge in dependency order: DB schema first, then simulation engine, then ingestion, then agents, then eval, then API, then frontend wiring
-3. Write integration tests at each merge boundary: "GDELT event -> curated_events table -> agent router -> agent decision -> cascade -> world state delta" as an end-to-end test with real (not mocked) subsystem instances
-4. Expect and budget time for interface adaptation: each merge will likely require 1-2 days of glue code and contract alignment
+1. Either compute bypass_flow from real data (EIA Strategic Petroleum Reserve releases, pipeline capacity, tanker rerouting data) and inject it
+2. Or remove bypass_flow from the prompt entirely if it cannot be computed accurately -- a missing field is better than a wrong one
+3. If keeping the field, add a hardcoded conservative estimate based on known bypass capacity (e.g., 5-8M bbl/day through non-Hormuz routes) until real-time data is available
+4. Add a validation check: if supply_loss > 0 and bypass_flow == 0, log a warning -- this combination means zero mitigation, which is almost never true
 
-**Which phase should address it:** The very first integration phase. This is THE critical path item. Nothing else works until the branches are reconciled.
+**Which phase should address it:** Phase 1 (Prompt Optimization). Quick fix: either remove or hardcode a reasonable estimate.
 
-**Confidence:** HIGH -- the parallel branch situation is documented in PROJECT.md and the git log confirms separate feature branches.
+**Confidence:** HIGH -- directly visible in oil_price.py line 92. `bypass_flow = 0.0` is never reassigned.
 
 ---
 
-### Pitfall 8: DuckDB Single-Writer Bottleneck Under Real-Time Load
+### Pitfall M-2: Track Record Injection Without Minimum Sample Size
 
-**What goes wrong:** The `DbWriter` processes writes serially via a single asyncio.Queue. In LIVE mode, a single tick can produce: world state deltas (dozens of cells), agent decisions (up to 50), curated events (variable), predictions (variable). If write latency is 5-10ms per statement and a tick generates 100 writes, the queue needs 500ms-1s to drain -- but the next tick may arrive in 900s (15 min) so this seems fine. The real problem is burst writes during cascade: all 6 cascade rules fire, each updating multiple cells, plus agent decisions, all enqueued within milliseconds. If any write blocks (DuckDB WAL sync, disk I/O spike), the queue backs up and subsequent ticks' writes pile on.
+**What goes wrong:** `track_record.py` injects hit rate statistics into model prompts with no minimum sample size guard. With 3 resolved signals, a 3/3 record becomes "Your track record: 3/3 correct (100% hit rate)." This makes the model overconfident. With 1/3, it says "33% hit rate" and may make the model overly cautious. In both cases, 3 signals is far too few for meaningful statistics.
 
-**Why it happens:** DuckDB is single-process by design. The single-writer pattern is correct for DuckDB, but the individual-statement-per-write pattern is not. CONCERNS.md already identifies this: "If write latency is 10ms and simulation generates 1000 deltas/tick, queue backs up."
+**Why it happens:** The function returns results for `total > 0` (line 46: `if row is None or row[0] == 0`). There is no minimum threshold.
+
+**Consequences:**
+- With a small winning streak, the model becomes overconfident and takes larger positions
+- With a small losing streak, the model becomes excessively conservative and misses real edges
+- The track record noise dominates the signal at small sample sizes, effectively randomizing model behavior based on a handful of early outcomes
 
 **Prevention:**
-1. Batch writes: collect all deltas/decisions/events for a tick into a single INSERT statement with multiple value rows. DuckDB handles batch inserts far more efficiently than individual ones.
-2. Use DuckDB's `executemany()` or prepared statements for repeated insert patterns
-3. Add queue depth monitoring with alerts: if queue depth > 50, log a warning; if > 200, trigger write batching automatically
-4. Add bounded queue with backpressure: if queue exceeds threshold, simulation pauses until writes catch up (better to slow the simulation than lose data)
+1. Add a minimum sample size of 10-20 resolved signals before injecting track record. Below that threshold, return the "No track record available yet" fallback
+2. Include confidence intervals: "3/3 correct (100% hit rate, but only 3 samples -- could be 30-100% with reasonable confidence)"
+3. Weight recent signals more heavily than old ones (recency bias is actually desirable here -- recent calibration data is more relevant)
+4. Separate track record by proxy class: a model's accuracy on DIRECT contracts tells you nothing about its accuracy on LOOSE_PROXY contracts
 
-**Which phase should address it:** During the pipeline wiring phase, as part of hardening the DbWriter before connecting real subsystems to it.
+**Which phase should address it:** Phase 1 (Prompt Optimization). Add a 10-signal minimum guard to build_track_record().
 
-**Confidence:** HIGH -- directly visible in writer.py architecture and documented in CONCERNS.md.
+**Confidence:** HIGH -- directly visible in track_record.py line 46. No sample size check exists.
 
 ---
 
-### Pitfall 9: Agent Memory Context Window Overflow
+### Pitfall M-3: News Source SPOF -- Google News RSS Is the Only Working Source
 
-**What goes wrong:** Each agent has a `rolling_context` (JSON in `agent_memory` table) that accumulates events, decisions, and world state summaries over time. In a multi-day simulation, agents that are frequently activated (e.g., IRGC, CENTCOM) accumulate large context windows. When the agent runner constructs the LLM prompt, it includes: system prompt + historical baseline + rolling context + current event + world state summary. For a highly-active agent after 3 days, this can exceed the model's context window or, more practically, exceed the budget tracker's `max_input_tokens` limit (configured per agent tier in ScenarioConfig).
+**What goes wrong:** GDELT DOC API returns 429 errors frequently (confirmed dead in milestone analysis). Truth Social feed (`truth_social.py`) was added for POTUS signals but only covers one account. Google News RSS is the sole reliable news source. If Google changes their RSS format, adds rate limiting, or blocks the IP, the system has zero news input and all 3 models run with "No recent events available" context.
 
-**Why it happens:** Rolling context grows monotonically without summarization or eviction. The "rolling" in the name implies a window, but without explicit truncation logic, it just accumulates.
+**Why it happens:** GDELT was the secondary source but died. No replacement was added. The system has graceful degradation (models still run with empty events), but empty-context predictions are essentially random.
+
+**Consequences:**
+- Single point of failure for the most critical input (news events)
+- No diversity of perspective -- Google News RSS has its own editorial selection bias
+- Missing non-English language sources (Persian media, Arabic media) that may carry signals before English-language outlets
+- During a fast-moving crisis, 5-15 minute RSS latency may be too slow vs real-time sources
+
+**Warning signs:**
+- Google News fetch returns 0 events for multiple consecutive runs
+- All models cite only Google News headlines in their evidence fields
+- Predictions fail to react to events that broke on Twitter/X hours before appearing in Google News
 
 **Prevention:**
-1. Implement a context window budget: before each LLM call, calculate total token count of the assembled prompt. If it exceeds 80% of max_input_tokens, summarize the oldest rolling context entries into a compressed summary.
-2. Use a sliding window: keep only the last N events/decisions in full detail; everything older gets summarized into a paragraph.
-3. Prioritize by relevance: keep full context for events related to the agent's domain; summarize peripheral events aggressively.
-4. Implement periodic context compaction: every N ticks, run a cheap (Haiku) summarization pass on each agent's context to compress it.
+1. Add Reuters/AP RSS feeds as parallel sources (these are free via RSS, same pattern as Google News)
+2. Add oil-specific feeds: OilPrice.com RSS, Argus Media RSS, Platts RSS
+3. For Twitter/X: avoid the $100/mo API. Use RSS Bridge or Nitter-alternative scraping for key journalist lists (10-20 accounts like @BarakRavid, @Joyce_Karam, @LOABORAMI). Rate limit carefully
+4. Implement source health monitoring: if any source returns 0 events for 3 consecutive runs, alert and switch to backup
+5. Add a "news diversity score" metric: count unique sources per run. If <2, flag degraded coverage
+6. Stagger RSS fetches across sources to avoid simultaneous failures
 
-**Which phase should address it:** During the agent-to-pipeline integration, before agents start receiving continuous real events. Must be solved before the system runs for more than 24 hours.
+**Which phase should address it:** Phase 3 (News Diversification). High priority because it reduces the SPOF risk.
 
-**Confidence:** MEDIUM -- the schema shows `rolling_context JSON` in `agent_memory` but the actual agent runner code is on a separate branch and wasn't inspectable. The pattern is a well-known problem in LLM agent architectures.
+**Confidence:** HIGH for the SPOF diagnosis. MEDIUM for Twitter/X alternatives (rate limits and scraping reliability are unpredictable).
 
 ---
 
-### Pitfall 10: Clock Drift Between GDELT Ingestion and Simulation Ticks
+### Pitfall M-4: Contract Discovery Registering Stale or Illiquid Contracts
 
-**What goes wrong:** GDELT updates every 15 minutes. The simulation engine ticks every 15 minutes (default `tick_duration_seconds: 900`). These two clocks are independent: GDELT fetches are triggered by cron/timer, simulation ticks by the DES engine's wall-clock anchor. If GDELT fetch takes 30 seconds (BigQuery + dedup + insert) and the simulation tick fires at the same wall-clock moment, the current tick's events may include last-fetch's data (stale) or next-fetch's data (not yet available). Over hours, drift accumulates: events arrive "late" relative to the tick they should influence.
+**What goes wrong:** The Kalshi client fetches child markets for 12 event tickers, but only 4 are registered in INITIAL_CONTRACTS (registry.py lines 20-77). When expanding to register all discovered contracts, the system may register:
+- Settled contracts (status "determined"/"finalized") that can no longer be traded
+- Illiquid contracts with zero volume or wide spreads (>10c) where the model's edge cannot be profitably executed
+- Expired contracts past their resolution date
+- Duplicate child contracts that resolve on the same underlying event at different thresholds (e.g., KXWTIMAX-26DEC31-T135, -T140, -T150 are all oil max contracts at different strikes)
 
-**Why it happens:** Two independent time sources (GDELT API timestamps, simulation engine monotonic clock) with no synchronization protocol.
+Currently, `_fetch_kalshi_markets()` in brief.py (line 781) filters for `status in ("open", "active")`, but the registry has no liquidity or volume filter.
+
+**Why it happens:** The registry was designed for manual curation of 4 well-understood contracts. Automated discovery at scale introduces contracts the system has never been classified for proxy mapping.
+
+**Consequences:**
+- Signals generated for illiquid contracts waste LLM budget and cannot be executed
+- Stale contracts in the registry produce confusing signals ("BUY_YES on a settled contract")
+- Too many low-quality contracts dilute the signal-to-noise ratio of the output
+- Without proxy classification for new contracts, they all get mapped as GENERIC_BINARY with no fair-value estimator, producing non-tradable results
 
 **Prevention:**
-1. Event timestamping at source: GDELT events carry their own timestamps. Route events to the correct tick based on event timestamp, not fetch timestamp.
-2. Tick-gated ingestion: the simulation engine signals "tick N starting" and the ingestion pipeline delivers all events with timestamps in [tick_N_start, tick_N_end). Events arriving after the window are queued for the next tick.
-3. Add a "data readiness" gate: a tick doesn't process until its ingestion window is confirmed complete (all GDELT data for that window has been fetched and deduplicated).
-4. Log and monitor event-to-tick latency: how many seconds/ticks late are events being processed relative to their source timestamp?
+1. Add discovery filters: minimum volume (>1000 contracts traded), maximum spread (<8c), status must be "open" or "active", resolution date must be in the future
+2. For each discovered contract, auto-classify the contract family from the ticker pattern (WTIMAX -> OIL_PRICE_MAX, etc.) but require manual proxy classification before trading
+3. Add a "discovered but unclassified" state in the registry -- contracts are fetched and tracked for market prices but not traded until classified
+4. Implement periodic staleness checks: if a registered contract goes inactive or settles, mark it inactive in the registry
+5. For threshold variants (T135, T140, T150), implement a "best strike" selector that picks the contract closest to the model's predicted level, not all of them
 
-**Which phase should address it:** During the GDELT-to-simulation wiring phase. The tick/ingestion synchronization protocol must be designed before connecting the pipeline end-to-end.
+**Which phase should address it:** Phase 4 (Contract Discovery). The discovery-classification-activation pipeline must be phased -- discover first, classify second, activate for trading third.
 
-**Confidence:** HIGH -- the two independent timing systems (engine.py's monotonic clock, GDELT's 15-min cadence) are visible in the codebase. No synchronization mechanism exists.
+**Confidence:** HIGH -- the 4-of-12 gap is documented in milestone analysis. The API behavior (fetched but discarded) is visible in brief.py lines 773-789.
 
 ---
 
-### Pitfall 11: Anthropic API Rate Limits and Transient Failures Break Agent Sweep
+### Pitfall M-5: Rolling Context JSON Unbounded Growth
 
-**What goes wrong:** The agent runner makes parallel LLM calls to Anthropic's API. With 50 agents and burst routing, the system can attempt 10-30 concurrent API calls. Anthropic's rate limits (requests per minute, tokens per minute) can throttle or reject calls. A single 429 (rate limit) or 529 (overloaded) response during an agent sweep means some agents don't produce decisions for that tick. The simulation proceeds with partial agent output, creating an asymmetric state where some actors responded and others didn't.
+**What goes wrong:** The planned rolling daily context feature auto-appends structured JSON per cron run with a 5-day rolling window. At 2 runs/day for 5 days, that's 10 context snapshots. Each snapshot includes: news events (20 headlines), predictions (3 models with reasoning), market prices (12+ tickers), and signals. Conservative estimate: 1,500-2,500 tokens per snapshot. Five days: 15,000-25,000 tokens of context prepended to every model call.
 
-**Why it happens:** Parallel LLM calls are necessary for throughput, but API rate limits are shared across the account. Prompt caching helps with token throughput but not request count limits.
+Combined with the crisis timeline (~3,000 tokens), track record (~200 tokens), cascade analysis (~500 tokens), and market prices (~300 tokens), the total context reaches 20,000-30,000 tokens before the model even starts reasoning. This is fine for Opus's 200K context window, but research shows LLM performance degrades as context grows -- accuracy can drop from 95% to 60% past certain thresholds, and the "lost in the middle" problem means context placed in the middle of long inputs gets 30%+ accuracy drops.
+
+**Why it happens:** The instinct is "more context = better predictions." But research on context rot (Chroma 2025) shows that semantically similar but irrelevant content actively misleads the model, and the effective context window is far below the advertised limit.
+
+**Consequences:**
+- Model accuracy degrades as rolling context grows, despite the system having more information
+- Older context entries (day 1 of 5) are in the "lost in the middle" zone and effectively ignored
+- Token costs increase linearly -- at 25K extra tokens per call, 3 models per run, 2 runs/day = 150K extra tokens/day at ~$0.005/run overhead (manageable under $20 budget, but measurable)
+- Stale predictions from 3-4 days ago may contradict current evidence, confusing the model
 
 **Prevention:**
-1. Implement retry with exponential backoff for 429/529 responses, with a per-tick deadline (if retries exceed tick duration, skip gracefully)
-2. Add a semaphore to limit concurrent API calls to a safe number (e.g., 10 concurrent requests, configurable)
-3. For partial agent sweeps, log which agents were skipped and include a "confidence reduction" flag on the tick's outputs
-4. Consider request batching: if Anthropic's batch API is available, submit all agent calls as a batch and poll for results
-5. Add circuit breaker at the API level: if error rate exceeds 30% in a window, pause agent calls for 60 seconds rather than burning budget on failing requests
+1. Implement aggressive summarization: don't carry raw snapshots. Summarize each day's context into 200-300 tokens using a cheap model (Haiku) before injecting into prediction prompts
+2. Use a recency-weighted structure: most recent run gets full detail (500 tokens), yesterday gets summary (200 tokens), 2-3 days ago get key changes only (100 tokens each). Total: ~1,000 tokens instead of 25,000
+3. Place rolling context near the END of the prompt, not the beginning -- this puts it in the "recency" attention zone instead of the "lost in the middle" zone
+4. Add a "delta-only" mode: instead of full snapshots, carry only what changed since last run. "Oil up $3, ceasefire talks stalled, no new signals" is 20 tokens vs 2,500
+5. Set a hard token budget for rolling context (e.g., 3,000 tokens max) and enforce truncation at insertion time
 
-**Which phase should address it:** During agent runner integration, before the first live pipeline run.
+**Which phase should address it:** Phase 3 (Rolling Context). Design the summarization pipeline before building the accumulation pipeline.
 
-**Confidence:** MEDIUM -- Anthropic rate limits depend on the account tier, which is unknown. The parallel call pattern is documented in PROJECT.md. The failure modes (partial sweep, asymmetric state) are architectural consequences.
+**Confidence:** MEDIUM-HIGH. The token arithmetic is straightforward. The performance degradation claim is backed by Chroma 2025 research, but the exact impact on this system's specific prompts is unknown without testing.
+
+---
+
+### Pitfall M-6: 4th Model (Iran Political Transition) Conflicting with Existing Models
+
+**What goes wrong:** Adding a 4th model for "Iran political transition" / regime change contracts creates signal conflicts with the existing ceasefire model. Both models reason about Iranian domestic politics: the ceasefire model asks "will there be a formal agreement?" and the political transition model asks "will there be a regime change?" These are partially correlated but not identical -- a regime change could accelerate or delay a formal agreement depending on who takes power. If both models generate signals on overlapping contracts (e.g., KXUSAIRANAGREEMENT), their signals may conflict (one says BUY_YES, the other says BUY_NO on the same contract).
+
+**Why it happens:** The existing 3 models have well-separated domains (oil, ceasefire, Hormuz). A 4th model breaks this clean separation by overlapping with the ceasefire model's domain.
+
+**Consequences:**
+- Conflicting signals on the same contract without a clear resolution mechanism
+- The oil deconfliction logic (`_deconflict_oil_signals` in brief.py) only handles oil contract conflicts -- no equivalent exists for ceasefire vs political transition
+- Without a weighted ensemble, the system may execute both conflicting signals, opening opposing positions on the same contract
+- Prompt token budget increases by ~4,000 tokens per run (crisis context + prompt), pushing total to ~20K tokens per run across 4 models
+
+**Prevention:**
+1. Define strict domain boundaries: the political transition model owns KXIRANDEMOCRACY, KXELECTIRAN, KXPAHLAVIHEAD, KXPAHLAVIVISITA, KXNEXTIRANLEADER contracts. The ceasefire model does NOT generate signals on these contracts
+2. For contracts that both models are relevant to (e.g., KXUSAIRANAGREEMENT), define one as primary and one as secondary via proxy classification. Primary generates the signal; secondary contributes to ensemble weighting
+3. Add a generalized deconfliction function (not just oil): for any contract with conflicting signals from different models, keep the signal from the model with the DIRECT or NEAR_PROXY classification and suppress the LOOSE_PROXY signal
+4. Add the 4th model to the model registry pattern (not hardcoded like the current 3)
+5. Budget check: 4 Opus calls at ~5K tokens each = ~$0.04/run. Still within budget but track it
+
+**Which phase should address it:** Phase 4 (Model Registry + 4th Model). Design the deconfliction generalization before adding the new model.
+
+**Confidence:** MEDIUM -- the domain overlap is architectural, but the exact contracts and signal patterns depend on how the 4th model is scoped.
+
+---
+
+### Pitfall M-7: File-Based Context System Path Resolution Across Environments
+
+**What goes wrong:** Converting the hardcoded `CRISIS_TIMELINE` string in crisis_context.py to a file-based system (e.g., `backend/data/context/crisis_timeline.md`) introduces path resolution issues across 3 environments:
+- **Local development**: `python -m parallax.cli.brief` from repo root -- relative paths work
+- **Docker**: backend runs from `/app/` -- file must be in the Docker image or mounted volume
+- **Tests**: pytest runs from various working directories -- path must resolve from test context
+- **Backtest**: engine.py monkey-patches `get_crisis_context()` (line 203) -- file-based system needs a different override mechanism
+
+Currently, crisis_context.py uses a Python string literal, so it works everywhere. Moving to files introduces a deployment and testing surface area that does not currently exist.
+
+**Why it happens:** Python string constants are zero-deployment-cost. File-based systems require the file to exist at the expected path in every environment.
+
+**Consequences:**
+- FileNotFoundError in Docker if context files are not COPY'd into the image
+- Tests that mock context need a different mocking strategy (no more monkey-patching a function)
+- Backtest date-limited context injection breaks if the file-reading function doesn't accept date parameters
+- Context updates require redeploying/restarting (no hot-reload) unless a file watcher is added
+
+**Prevention:**
+1. Use `importlib.resources` or `pkg_resources` to bundle context files as package data, avoiding absolute path issues
+2. Or keep the default context as a Python constant (fallback) with an optional file override path via environment variable: `PARALLAX_CONTEXT_DIR=/path/to/context/`
+3. Add a `--context-dir` CLI argument to brief.py for easy local override
+4. For Docker: add context files to `COPY` in Dockerfile and set the env var
+5. For backtest: instead of monkey-patching, pass a `context_override: str | None` parameter through the prediction call chain. If provided, use it instead of file/default
+6. Add a startup check: if context files are expected but missing, fail fast with a clear error, not silently fall back to empty context
+
+**Which phase should address it:** Phase 2 (Pre-Crisis Context + File System). Design the resolution strategy before migrating any content to files.
+
+**Confidence:** HIGH -- the backtest monkey-patching pattern (backtest/engine.py line 203-205) confirms that context injection needs a clean override mechanism. The Docker COPY requirement is standard.
+
+---
+
+### Pitfall M-8: New RSS Sources Producing Duplicate or Irrelevant Events
+
+**What goes wrong:** Adding Reuters, AP, oil-specific feeds, and Twitter/X lists alongside Google News RSS multiplies the volume of ingested events. The current deduplication is URL-hash based (google_news.py line 46: `hashlib.md5(self.url.encode())`). This catches exact URL duplicates but NOT:
+- Same story from different publishers (Reuters headline vs AP headline about the same press conference)
+- Same underlying event with different URLs (Google News redirect URL vs direct publisher URL)
+- Translated duplicates (Persian/Arabic source in English translation)
+- Twitter thread summarizing a Reuters story
+
+Without content-level deduplication, the models receive 5x more events but the same number of unique incidents, causing the "media attention bias" problem (Pitfall 4 from original PITFALLS.md, still relevant).
+
+**Why it happens:** URL-hash dedup was sufficient when Google News RSS was the only source. With multiple sources covering the same events, content-level dedup becomes necessary.
+
+**Consequences:**
+- Models weight heavily-covered events more than genuinely important but under-covered events
+- Token budget consumed on redundant news items (20 events at ~50 tokens each = 1,000 tokens wasted if 50% are duplicates)
+- Diplomatic keyword filter in ceasefire model (ceasefire.py `_filter_diplomatic()`) may over-trigger on duplicate diplomatic coverage, biasing the ceasefire model
+
+**Prevention:**
+1. Add title-level fuzzy dedup: normalize titles (lowercase, remove punctuation, strip source attributions), compute SimHash or Jaccard similarity. Threshold: 0.85 similarity = duplicate
+2. Group events by incident: (actor, action, timeframe) clustering. "Iran talks" + "Islamabad negotiations" + "Vance meets Iranian delegation" should cluster as one incident
+3. Add a source diversity score per event cluster: prefer clusters with 3+ sources (broad coverage = more important) but emit only one representative event per cluster
+4. For Twitter/X sources: mark with lower weight or "supplementary" flag -- tweets should add context to existing events, not create new standalone events
+5. Set a per-source rate limit: max 10 events per source per run to prevent any single source from dominating
+6. The current `seen_hashes` pattern (shared across Google News, GDELT, Truth Social) is good -- extend it to new sources
+
+**Which phase should address it:** Phase 3 (News Diversification). Implement dedup upgrades BEFORE adding new sources, not after.
+
+**Confidence:** MEDIUM-HIGH. The URL-hash-only dedup is visible in google_news.py. The duplicate problem at scale is well-documented in news aggregation literature. The exact duplication rate across planned sources is unknown without testing.
 
 ---
 
 ## Minor Pitfalls
 
-Mistakes that cause annoyance, debugging time, or incremental tech debt.
+Mistakes that cause debugging time, minor regressions, or incremental tech debt.
 
 ---
 
-### Pitfall 12: Nondeterministic Cascade Rule Ordering
+### Pitfall L-1: Model Registry Refactor Breaking Existing Test Mocks
 
-**What goes wrong:** CONCERNS.md documents: "What happens if two cascade rules modify the same cell in the same tick? Who wins? Is the order deterministic?" The cascade engine's 6 rules are called in a fixed code order, but if the handler processes multiple events in the same tick (FIFO within tick via sequence counter), each event independently triggers cascade rules. The second event's cascade sees the first event's mutations, making output order-dependent.
+**What goes wrong:** Refactoring brief.py from hardcoded model calls (lines 491-499) to a registry pattern changes the import structure, constructor signatures, and call patterns that existing tests mock. Tests that mock `OilPricePredictor.predict()` directly will break when the predictor is instantiated via a registry lookup instead of explicit construction.
 
-**Prevention:** Process all events for a tick, collect all cascade deltas without applying them, resolve conflicts (e.g., last-write-wins or max-severity-wins), then apply atomically. This is the "cascade transaction boundary" mentioned in Pitfall 3.
+**Prevention:**
+1. Keep the existing test interface stable: the registry wraps the existing predictor classes, it does not replace them
+2. Use dependency injection: the registry accepts predictor instances at construction time (for testing) or auto-discovers them (for production)
+3. Add registry-level integration tests alongside existing unit tests, don't delete unit tests
+4. Refactor incrementally: first make the registry call the same 3 predictors in the same way, verify tests pass, THEN add 4th model
 
-**Which phase should address it:** Simulation engine hardening, before agents are connected.
+**Which phase should address it:** Phase 4 (Model Registry). Incremental refactoring with test preservation.
 
-**Confidence:** HIGH -- documented in CONCERNS.md test coverage gaps.
-
----
-
-### Pitfall 13: Frontend State Desync After WebSocket Reconnect
-
-**What goes wrong:** The WebSocket hook has auto-reconnect, but after reconnection, the frontend has stale state. If it missed 3 ticks of updates during the disconnect, the map shows old influence colors and indicators show old values. Without a "catch-up" mechanism, the frontend is silently wrong until the next full state push.
-
-**Prevention:** On WebSocket reconnect, the client sends its last-known tick number. The server responds with a full state snapshot or delta bundle from that tick to current. Don't rely on the live update stream to eventually correct stale state.
-
-**Which phase should address it:** WebSocket server and frontend wiring phase.
-
-**Confidence:** HIGH -- auto-reconnect without state sync is a well-known WebSocket anti-pattern, and the current hook is documented as having auto-reconnect without this capability.
+**Confidence:** HIGH -- the test suite (192 tests) depends on the current structure. Any refactor risk is proportional to the number of tests that mock prediction internals.
 
 ---
 
-### Pitfall 14: Scenario Config Not Versioned with Simulation Runs
+### Pitfall L-2: Kalshi API Rate Limits During Contract Discovery
 
-**What goes wrong:** The ScenarioConfig is loaded from a YAML file at startup. If the analyst tweaks parameters between runs (adjusting price elasticity, cooldown ticks, etc.), there is no record of which config was used for which simulation run. Eval results from different config versions are compared as if equivalent.
+**What goes wrong:** Enumerating child contracts for 12 event tickers requires at least 12 GET /markets requests (one per event_ticker), plus individual GET /markets/{ticker} calls for each discovered child contract to get orderbook data. At 12 events x ~5-10 child contracts each = 60-120 API calls. Kalshi's Basic tier allows 20 reads/second, so a full discovery sweep takes 3-6 seconds. But if the discovery runs as part of the normal brief pipeline (every cron run), that's 60-120 extra API calls per run on top of existing market price fetches.
 
-**Prevention:** Hash the loaded config and store it in `simulation_state` at run start. Include config hash in eval_results for filtering. Reject comparisons across config versions in the eval dashboard.
+**Prevention:**
+1. Run contract discovery separately from the brief pipeline -- a daily or weekly discovery cron, not every run
+2. Cache discovered contracts in DuckDB. Only re-fetch if the contract wasn't checked in the last 24 hours
+3. Add exponential backoff for 429 responses. Kalshi returns 429 on rate limit; the current client (kalshi.py) raises KalshiAPIError without retry
+4. Batch discovery: fetch all child markets per event_ticker in one call (the `/markets?event_ticker=X` endpoint already does this), don't make individual calls
+5. Monitor API usage: track calls per minute and alert if approaching tier limits
 
-**Which phase should address it:** Eval framework phase.
+**Which phase should address it:** Phase 4 (Contract Discovery). Separate discovery from the hot path.
 
-**Confidence:** HIGH -- visible in config.py (no versioning) and schema.py (simulation_state table exists but no config tracking).
+**Confidence:** HIGH -- Kalshi rate limits confirmed at 20 reads/sec for Basic tier via official docs.
 
 ---
 
-### Pitfall 15: Docker Volume State Persists Across Schema Migrations
+### Pitfall L-3: Pre-Crisis Context Gap (Aug 2025 - Feb 2026) Poorly Researched
 
-**What goes wrong:** The DuckDB volume (`duckdb-data`) persists across container rebuilds. If a schema migration adds columns or changes table structures, the old `.duckdb` file doesn't update. `CREATE TABLE IF NOT EXISTS` silently succeeds even if the existing table has a different schema. New code writes columns that don't exist, or reads columns that were renamed.
+**What goes wrong:** crisis_context.py has only 3 bullet points for the 6-month pre-war escalation (Aug 2025 - Feb 2026): "failed nuclear negotiations," "brief 12-day air conflict," "tensions continued to escalate." This period is critical for the models' understanding of WHY the war started and what diplomatic/military patterns preceded it. Without this context, models cannot reason about historical precedent ("the last time talks failed, X happened within 2 weeks").
 
-**Prevention:** Add a schema version table. On startup, check version and run migrations sequentially. For development, add a `--reset-db` flag that drops and recreates all tables. Document that `docker volume rm duckdb-data` is needed after breaking schema changes.
+**Prevention:**
+1. Research and write 15-20 bullet points covering Aug 2025 - Feb 2026, sourced from archived news
+2. Key events to cover: Geneva talks timeline, June 2025 air conflict details (what started it, how it ended, market reaction), uranium enrichment milestones, sanctions changes, IAEA reports, key diplomatic personnel changes
+3. Structure chronologically with clear dates
+4. Separate from the Feb 2026+ timeline -- this is "background" context, not "crisis" context
+5. Keep it factual (learning from C-2: no editorial in context)
 
-**Which phase should address it:** First integration phase, before the schema is modified during branch merges.
+**Which phase should address it:** Phase 2 (Pre-Crisis Context). Research task that produces a data file.
 
-**Confidence:** HIGH -- `CREATE TABLE IF NOT EXISTS` pattern visible in schema.py, Docker volume persistence visible in docker-compose.yml.
+**Confidence:** MEDIUM -- the gap is visible in crisis_context.py lines 20-24. The impact on model quality is uncertain without A/B testing with vs without the expanded context.
+
+---
+
+### Pitfall L-4: Backtest Scoring Uses Next-Day Price Movement, Not Settlement
+
+**What goes wrong:** The backtest scoring function (`_score_results` in backtest/engine.py, lines 277-377) evaluates model accuracy by comparing today's prediction to tomorrow's market price movement: `correct = model_says_buy_yes == market_went_up`. But the system's actual strategy is hold-to-settlement, not day-trading. A contract can move against the position for days and still settle in your favor. Scoring on next-day price movement penalizes correct long-term predictions that happen to have short-term adverse movement.
+
+**Prevention:**
+1. Score backtests against actual settlement outcomes (where available), not next-day price movements
+2. For unsettled contracts, score against the final market price at the end of the backtest window as a proxy for eventual settlement
+3. Add a "hold-to-settlement" scoring mode that ignores intermediate price movements entirely
+4. Report both metrics separately: "directional accuracy" (next-day) and "settlement accuracy" for different analytical purposes
+5. The existing P&L calculation (`pnl = next_close - today_close`) should be replaced with settlement P&L for realistic performance assessment
+
+**Which phase should address it:** Phase 5 (Resolution Backtesting). The scoring methodology must match the actual trading strategy.
+
+**Confidence:** HIGH -- directly visible in backtest/engine.py lines 306 and 316. The scoring logic explicitly uses `next_close` instead of settlement price.
 
 ---
 
 ## Phase-Specific Warnings
 
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| Branch merging / integration | Interface mismatches across 10 parallel branches (#7) | Define shared contracts first; merge in dependency order |
-| GDELT-to-agent pipeline | Noise overwhelming signal (#4), clock drift (#10) | Incident clustering, tick-gated ingestion |
-| Agent runner integration | Budget exhaustion (#2), API rate limits (#11), context overflow (#9) | Event-level budget gating, priority routing, context windowing |
-| Cascade engine hardening | Feedback loops (#3), nondeterministic ordering (#12) | Damping, cascade transactions, velocity limits |
-| World state persistence | Silent divergence (#1), DuckDB bottleneck (#8) | Write acknowledgment, batch writes, consistency checks |
-| WebSocket / frontend | Update flooding (#5), reconnect desync (#13) | Tick-batched messages, catch-up on reconnect |
-| Eval framework | Stale/missing ground truth (#6), unversioned configs (#14) | Categorize by scoreability, start with oil prices only |
-| Docker / deployment | Volume state across migrations (#15) | Schema versioning, migration runner |
+| Phase | Likely Pitfall | Severity | Mitigation |
+|-------|---------------|----------|------------|
+| 1: Prompt Optimization | Market price anchoring (C-1), hypothesis injection (C-2), Hormuz dual-probability (C-5), bypass_flow=0 (M-1), track record sample size (M-2) | CRITICAL | Remove anchoring, split facts from opinions, fix schema mismatch |
+| 2: Pre-Crisis Context + File System | Path resolution across environments (M-7), context gap (L-3) | MODERATE | Use pkg_resources or env var override, research Aug 2025-Feb 2026 events |
+| 2: Unified Ensemble | Split-brain aggregation (C-3) | CRITICAL | Extract shared aggregation module, add cross-path tests |
+| 3: News Diversification | News SPOF (M-3), duplicate events (M-8), Twitter/X rate limits | MODERATE | Add feeds incrementally, implement content-level dedup first |
+| 3: Rolling Context | JSON unbounded growth (M-5), context rot | MODERATE | Summarize before injecting, set hard token budget, recency-weight |
+| 4: Contract Discovery | Stale/illiquid contracts (M-4), API rate limits (L-2) | MODERATE | Separate discovery from hot path, add liquidity filters, cache results |
+| 4: Model Registry + 4th Model | Test breakage (L-1), signal conflicts (M-6) | MODERATE | Incremental refactor, generalize deconfliction |
+| 5: Resolution Backtesting | Lookahead bias (C-4), next-day scoring (L-4) | CRITICAL | Use point-in-time data, score against settlement not price movement |
 
 ---
 
-## Integration-Specific Meta-Pitfall: Testing Individual Modules Is Not Testing the Pipeline
+## Integration-Specific Meta-Pitfall: Fixing Prompts Without Measuring the Baseline
 
-**What goes wrong:** Each subsystem has its own tests (51 tests documented). But the integration boundary -- where GDELT events flow into agents which produce decisions which trigger cascades which update world state which pushes to frontend -- has zero test coverage. Each module works in isolation but fails at the seams. The most common integration bugs are: (a) data format mismatches, (b) timing assumptions (async vs sync, tick boundaries), (c) error propagation (one module's exception is another's silent failure), (d) resource contention (multiple modules competing for the single DbWriter queue).
+**What goes wrong:** The milestone involves fixing multiple prompt issues (anchoring, hypothesis injection, bypass_flow, dual probability, track record). If all fixes are applied simultaneously, there is no way to attribute improvements or regressions to specific changes. Did the model improve because anchoring was removed, or worsen because the hypothesis injection was also removed? Without baselines and isolated testing, prompt optimization becomes guesswork.
 
-**Prevention:** Before declaring integration complete, write at least one end-to-end test that:
-1. Ingests a synthetic GDELT event
-2. Routes it to at least one agent
-3. Processes the agent decision through cascade
-4. Verifies world state updated correctly in both memory and DB
-5. Verifies a WebSocket message was emitted with the correct delta
-6. Verifies the prediction was logged for later eval
+**Prevention:**
+1. Before making any prompt changes, run the current prompts through the backtest suite and record baseline accuracy metrics per model
+2. Apply changes one at a time, rerunning backtests after each change
+3. Track prompt versions with hashes or sequential IDs -- log which prompt version produced each prediction
+4. At minimum, measure: (a) prediction variance (are outputs less clustered near market prices?), (b) edge magnitude (are edges larger?), (c) directional accuracy (are predictions more often correct?)
+5. If testing one-at-a-time is too expensive (each backtest costs ~$0.50 in Opus calls), at least do: baseline -> all changes -> measure delta. Then selectively revert changes that seem harmful
 
-This single test will catch more integration bugs than 50 unit tests.
-
-**Which phase should address it:** Every integration phase should include at least one end-to-end test covering its boundary.
+**Which phase should address it:** Phase 1 (Prompt Optimization). Baseline measurement is the FIRST step, before any prompt edits.
 
 ---
 
 ## Sources
 
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/.planning/PROJECT.md` -- project requirements, constraints, key decisions
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/.planning/codebase/CONCERNS.md` -- documented tech debt, bugs, performance bottlenecks, fragile areas
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/db/writer.py` -- DbWriter implementation
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/db/schema.py` -- DuckDB schema
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/simulation/engine.py` -- DES engine
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/simulation/cascade.py` -- cascade rules
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/simulation/circuit_breaker.py` -- escalation control
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/simulation/world_state.py` -- world state manager
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/backend/src/parallax/simulation/config.py` -- scenario config
-- `/Users/adit/Personal Projects/Parallax-Geopolitcal-Swarm/docker-compose.yml` -- Docker setup
-- General domain knowledge: DES simulation patterns, LLM agent architectures, WebSocket real-time systems, GDELT data characteristics, geopolitical forecasting evaluation (Good Judgment Project, Metaculus)
+### Codebase (PRIMARY -- HIGH confidence)
+- `backend/src/parallax/prediction/oil_price.py` -- market price injection, bypass_flow=0
+- `backend/src/parallax/prediction/ceasefire.py` -- market price injection, diplomatic filtering
+- `backend/src/parallax/prediction/hormuz.py` -- dual probability spec mismatch
+- `backend/src/parallax/prediction/crisis_context.py` -- hypothesis injection, pre-crisis gap
+- `backend/src/parallax/cli/brief.py` -- live signal pipeline, no ensemble aggregation
+- `backend/src/parallax/portfolio/simulator.py` -- backtest aggregation, split-brain logic
+- `backend/src/parallax/contracts/registry.py` -- 4 of 12 contracts registered
+- `backend/src/parallax/contracts/mapping_policy.py` -- fair value estimation, cost model
+- `backend/src/parallax/scoring/track_record.py` -- no sample size minimum
+- `backend/src/parallax/scoring/resolution.py` -- settlement backfill logic
+- `backend/src/parallax/backtest/engine.py` -- lookahead bias, next-day scoring
+- `backend/src/parallax/markets/kalshi.py` -- 12 event tickers, API client
+- `backend/src/parallax/ingestion/google_news.py` -- URL-hash-only dedup
+- `backend/src/parallax/ingestion/gdelt_doc.py` -- dead source (429s)
 
-**Note:** WebSearch was unavailable during this research session. Pitfalls are derived from direct codebase analysis, documented concerns, and domain knowledge from training data. Confidence levels reflect this -- findings grounded in visible code are HIGH; findings about runtime behavior of components on unmerged branches are MEDIUM.
+### Research (MEDIUM confidence)
+- ACL 2025 / Springer 2025: LLM anchoring bias -- models influenced by initial parameters 17-57% of instances
+- Chroma 2025: Context rot -- irrelevant content actively misleads models, performance degrades with context length
+- Paulsen 2025: Effective context windows fall far below advertised limits, up to 99% on complex tasks
+- Kalshi official docs: Basic tier rate limits at 20 reads/sec, 10 writes/sec
+- News aggregation literature: URL dedup insufficient for multi-source; SimHash/Jaccard needed for content dedup
+- Backtesting literature: lookahead bias is the most common mistake; point-in-time data required
 
 ---
 
-*Concerns audit: 2026-03-30*
+*Pitfalls audit: 2026-04-12 (v1.4 milestone: model intelligence + resolution validation)*
