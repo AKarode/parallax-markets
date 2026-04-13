@@ -18,23 +18,24 @@ from parallax.prediction.schemas import PredictionOutput
 
 logger = logging.getLogger(__name__)
 
-CEASEFIRE_SYSTEM_PROMPT = """You are a geopolitical analyst specializing in conflict resolution. Given these recent diplomatic events about Iran-US negotiations, estimate the probability of a ceasefire holding through the next 14 days.
+CEASEFIRE_SYSTEM_PROMPT = """You are a geopolitical analyst specializing in conflict resolution. Given these recent diplomatic events about Iran-US negotiations, estimate the probability that a formal US-Iran agreement will be reached by mid-2027.
+
+IMPORTANT: You are predicting a FORMAL AGREEMENT — a signed deal, framework accord, or binding diplomatic agreement between the US and Iran. This is NOT about whether a ceasefire holds day-to-day. A ceasefire holding is necessary but NOT sufficient — many ceasefires never produce formal agreements.
 
 Consider:
-- Talks location and formality
-- Mediator involvement (Qatar, Oman, Switzerland)
+- Current negotiation stage (back-channel vs. formal talks vs. near-framework)
+- Historical base rate: US-Iran formal agreements are extremely rare (JCPOA took 2+ years of formal talks)
+- Mediator involvement and track record (Qatar, Oman, Switzerland)
+- Domestic political constraints on both sides (US election cycle, Iranian hardliners)
 - Military posture signals (deployments, exercises, withdrawals)
-- Historical precedent for similar diplomatic configurations
-- Economic pressure indicators
+- Sanctions relief dynamics and economic pressure
+- Gap between ceasefire/de-escalation and formal agreement
 
 Recent diplomatic events:
 {diplomatic_events}
 
 Additional context:
 {context}
-
-Current market prices:
-{market_prices_text}
 
 ## YOUR TRACK RECORD
 {track_record}
@@ -43,7 +44,7 @@ Consider what the market may already be pricing in and where it might be wrong.
 
 Output ONLY valid JSON (no markdown):
 {{
-  "probability": <float 0-1, probability of ceasefire holding>,
+  "probability": <float 0-1, probability of formal US-Iran agreement by mid-2027>,
   "confidence": <float 0-1, how confident you are in this estimate>,
   "direction": "<increase|decrease|stable>",
   "magnitude_range": [<low>, <high>],
@@ -70,7 +71,6 @@ class CeasefirePredictor:
         self,
         recent_events: list[dict],
         current_negotiations: str | None = None,
-        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run ceasefire prediction pipeline.
@@ -93,10 +93,11 @@ class CeasefirePredictor:
         events_text = self._format_events(diplomatic) if diplomatic else self._format_events(recent_events[:5])
         context = current_negotiations or "No specific negotiation context provided."
 
-        prompt = CEASEFIRE_SYSTEM_PROMPT.format(
+        from parallax.prediction.crisis_context import get_crisis_context
+
+        prompt = get_crisis_context() + "\n\n" + CEASEFIRE_SYSTEM_PROMPT.format(
             diplomatic_events=events_text,
             context=context,
-            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
@@ -187,13 +188,3 @@ class CeasefirePredictor:
                 lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _format_market_prices(market_prices: list[dict] | None) -> str:
-        if not market_prices:
-            return "No market prices available."
-        lines = []
-        for mp in market_prices:
-            price = mp.get("derived_yes_price") or mp.get("yes_price")
-            price_str = f"{price:.0%}" if price is not None else "N/A"
-            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {price_str}")
-        return "\n".join(lines)

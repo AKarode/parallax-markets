@@ -25,6 +25,9 @@ from parallax.prediction.ceasefire import CeasefirePredictor
 from parallax.prediction.hormuz import HormuzReopeningPredictor
 from parallax.prediction.oil_price import OilPricePredictor
 from parallax.prediction.schemas import PredictionOutput
+from parallax.config.risk import load_risk_limits
+from parallax.portfolio.allocator import PortfolioAllocator
+from parallax.portfolio.schemas import PortfolioState, ProposedTrade
 from parallax.scoring.ledger import SignalLedger
 from parallax.scoring.prediction_log import PredictionLogger
 from parallax.scoring.recalibration import recalibrate_probability
@@ -382,6 +385,63 @@ def _persist_market_prices(
         )
 
 
+OIL_CONFLICT_TICKERS = {"KXWTIMAX-26DEC31", "KXWTIMIN-26DEC31"}
+
+
+def _deconflict_oil_signals(signals: list) -> None:
+    """Suppress conflicting oil signals from the same model.
+
+    If oil_price generates tradable signals on both KXWTIMAX (bullish) and
+    KXWTIMIN (bearish), keep only the one with the highest effective edge.
+    The loser gets downgraded to HOLD so it stays in the ledger for auditing.
+    """
+    oil_tradable = [
+        s for s in signals
+        if s.model_id == "oil_price"
+        and s.contract_ticker in OIL_CONFLICT_TICKERS
+        and s.signal in ("BUY_YES", "BUY_NO")
+    ]
+    if len(oil_tradable) <= 1:
+        return
+
+    best = max(oil_tradable, key=lambda s: abs(s.effective_edge or 0.0))
+    for s in oil_tradable:
+        if s.signal_id != best.signal_id:
+            s.signal = "HOLD"
+            s.reason = (
+                f"Deconflicted: suppressed in favor of {best.contract_ticker} "
+                f"(edge {best.effective_edge:.1%} vs {s.effective_edge:.1%})"
+            )
+            logger.info(
+                "Oil deconflict: suppressed %s in favor of %s",
+                s.contract_ticker, best.contract_ticker,
+            )
+
+
+def _load_portfolio_state(conn: duckdb.DuckDBPyConnection) -> PortfolioState:
+    """Load current open positions and today's realized P&L from DuckDB."""
+    rows = conn.execute("""
+        SELECT ticker, side, quantity, open_quantity, entry_price, status
+        FROM trade_positions
+        WHERE status = 'open'
+    """).fetchall()
+    positions = [
+        {
+            "ticker": r[0], "side": r[1], "quantity": int(r[2]),
+            "open_quantity": int(r[3]) if r[3] is not None else None,
+            "entry_price": float(r[4]), "status": r[5],
+        }
+        for r in rows
+    ]
+    pnl_row = conn.execute("""
+        SELECT COALESCE(SUM(realized_pnl), 0.0)
+        FROM trade_positions
+        WHERE closed_at >= CURRENT_DATE
+    """).fetchone()
+    daily_pnl = float(pnl_row[0]) if pnl_row else 0.0
+    return PortfolioState(positions=positions, daily_realized_pnl=daily_pnl)
+
+
 async def run_brief(
     dry_run: bool = False,
     no_trade: bool = False,
@@ -418,24 +478,14 @@ async def run_brief(
             _fetch_polymarket_markets(),
         )
         market_prices = kalshi_markets + poly_markets
-        market_context = [
-            {
-                "ticker": market.ticker,
-                "derived_yes_price": market.yes_price,
-                "best_yes_ask": market.best_yes_ask,
-                "best_no_ask": market.best_no_ask,
-                "source": market.source,
-            }
-            for market in market_prices
-        ]
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
         predictions = list(
             await asyncio.gather(
-                oil_pred.predict(events, prices, world_state, market_prices=market_context, db_conn=conn),
-                ceasefire_pred.predict(events, market_prices=market_context, db_conn=conn),
-                hormuz_pred.predict(events, world_state, market_prices=market_context, db_conn=conn),
+                oil_pred.predict(events, prices, world_state, db_conn=conn),
+                ceasefire_pred.predict(events, db_conn=conn),
+                hormuz_pred.predict(events, world_state, db_conn=conn),
             ),
         )
 
@@ -493,6 +543,11 @@ async def run_brief(
             )
             all_signals.append(signal)
 
+    # Deconflict oil contracts: don't let one oil_price prediction generate
+    # tradable signals on both KXWTIMAX (bullish) and KXWTIMIN (bearish).
+    # Keep only the signal with the highest effective edge.
+    _deconflict_oil_signals(all_signals)
+
     trade_journal: list[dict] = []
     if not dry_run and not no_trade:
         kalshi_key = os.environ.get("KALSHI_API_KEY", "")
@@ -500,9 +555,26 @@ async def run_brief(
         if kalshi_key and kalshi_pk:
             kalshi = KalshiClient(api_key=kalshi_key, private_key_path=kalshi_pk)
             tracker = PaperTradeTracker(conn=conn, ledger=ledger, kalshi_client=kalshi)
+            risk_limits = load_risk_limits()
+            allocator = PortfolioAllocator(risk_limits)
+            portfolio_state = _load_portfolio_state(conn)
             for signal in ledger.get_actionable_signals():
-                qty = 10 if signal.suggested_size == "full" else 5
-                await tracker.execute_signal(signal, quantity=qty)
+                if signal.entry_price is None or signal.entry_side is None:
+                    continue
+                proposed = ProposedTrade(
+                    ticker=signal.contract_ticker,
+                    side=signal.entry_side,
+                    price=signal.entry_price,
+                    theme=signal.model_id or "general",
+                    signal_id=signal.signal_id,
+                )
+                auth = allocator.authorize_trade(proposed, portfolio_state)
+                if not auth.authorized:
+                    logger.info(
+                        "Allocator blocked %s: %s", signal.contract_ticker, auth.block_reason,
+                    )
+                    continue
+                await tracker.execute_signal(signal, quantity=auth.allowed_size)
             trade_journal = tracker.get_trade_journal()
     else:
         trade_journal = []

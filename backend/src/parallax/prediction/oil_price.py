@@ -34,9 +34,6 @@ Recent GDELT events:
 Current EIA price data:
 {price_data}
 
-Current market prices:
-{market_prices_text}
-
 ## YOUR TRACK RECORD
 {track_record}
 
@@ -71,7 +68,6 @@ class OilPricePredictor:
         recent_events: list[dict],
         current_prices: list[dict],
         world_state: WorldState,
-        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run oil price prediction pipeline.
@@ -114,14 +110,15 @@ class OilPricePredictor:
         price_data = self._format_prices(current_prices[:5])
 
         # Step 3: LLM call
-        prompt = OIL_PRICE_SYSTEM_PROMPT.format(
+        from parallax.prediction.crisis_context import get_crisis_context
+
+        prompt = get_crisis_context() + "\n\n" + OIL_PRICE_SYSTEM_PROMPT.format(
             supply_loss=supply_loss,
             bypass_flow=bypass_flow,
             price_shock_pct=price_shock_pct,
             current_price=current_price,
             events_summary=events_summary,
             price_data=price_data,
-            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
@@ -209,13 +206,3 @@ class OilPricePredictor:
             lines.append(f"- {period}: ${value}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _format_market_prices(market_prices: list[dict] | None) -> str:
-        if not market_prices:
-            return "No market prices available."
-        lines = []
-        for mp in market_prices:
-            price = mp.get("derived_yes_price") or mp.get("yes_price")
-            price_str = f"{price:.0%}" if price is not None else "N/A"
-            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {price_str}")
-        return "\n".join(lines)
