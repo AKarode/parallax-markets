@@ -4,7 +4,8 @@
 
 - ✅ **v1.2 Contract Alignment + Paper Trading** - Phases 1-3 (shipped 2026-04-09)
 - 📋 **v1.2 Expansion** - Phases 4-5 (deferred)
-- 🚧 **v1.3 Daily Feedback Loop + Scorecard** - Phases 6-9 (in progress)
+- 📋 **v1.3 Daily Feedback Loop + Scorecard** - Phases 6-9 (deprioritized)
+- 🚧 **v1.4 Model Intelligence + Resolution Validation** - Phases 10-14 (in progress)
 
 ## Phases
 
@@ -29,7 +30,6 @@ Plans:
 - [x] 01-01-PLAN.md — Contract schemas (ProxyClass, ContractRecord, MappingResult) + DuckDB tables + ContractRegistry CRUD + seed data
 - [x] 01-02-PLAN.md — MappingPolicy class with proxy-aware confidence discounting and probability inversion
 - [x] 01-03-PLAN.md — SignalLedger persistence + rewire brief.py to use MappingPolicy + SignalLedger
-**Reference:** .planning/research/contract-mapping/RESEARCH.md
 
 ### Phase 2: Prediction Persistence + Calibration
 **Goal**: Every prediction the system makes is persisted with full context, enabling calibration analysis and model improvement.
@@ -63,6 +63,7 @@ Plans:
 - [x] 03-03-PLAN.md — Track record injection: build_track_record() utility, db_conn on predictors, {track_record} prompt placeholder
 - [x] 03-04-PLAN.md — Mechanical recalibration: bucket-based probability adjustment, MappingPolicy threshold auto-tuning, suggested_size advisory
 - [x] 03-05-PLAN.md — Gap closure: discount factor auto-adjustment from hit_rate_by_proxy_class calibration data
+**Reference:** .planning/research/contract-mapping/RESEARCH.md
 
 </details>
 
@@ -95,16 +96,13 @@ Plans:
 
 </details>
 
-### 🚧 v1.3 Daily Feedback Loop + Scorecard (In Progress)
-
-**Milestone Goal:** Build automated daily telemetry, scoring, and feedback so the system can measure and improve its own forecasting and trading performance -- safely, with statistical rigor.
+<details>
+<summary>v1.3 Daily Feedback Loop + Scorecard (Phases 6-9) - DEPRIORITIZED</summary>
 
 - [ ] **Phase 6: Telemetry Foundation** - Schema + wiring for runs, ops_events, llm_usage, daily_scorecard tables and experiment tags
 - [ ] **Phase 7: Scorecard CLI + Metrics** - CLI command computing and persisting all scorecard metrics across 5 metric categories
 - [ ] **Phase 8: Alerting + Dashboard** - Threshold-based alerting, safety halts, API endpoint, and minimal dashboard
 - [ ] **Phase 9: Feedback Automation + Experiments** - Champion/challenger routing, bounded parameter updates, and statistically valid online monitoring
-
-## Phase Details
 
 ### Phase 6: Telemetry Foundation
 **Goal**: Every pipeline run, LLM call, ops event, and experiment variant is tracked in DuckDB -- giving the scorecard and alerting phases a complete data foundation to query against.
@@ -155,16 +153,87 @@ Plans:
   5. Sequentially valid inference (always-valid p-values / confidence sequences) enables continuous monitoring of experiment outcomes without inflating false positive rates
 **Plans**: TBD
 
+</details>
+
+### 🚧 v1.4 Model Intelligence + Resolution Validation (In Progress)
+
+**Milestone Goal:** Fix structural flaws in how models see data (anchoring, context gaps, single news source) and what they predict against (4 of 12+ event tickers), then validate the hold-to-settlement thesis by scoring against actual settlement outcomes.
+
+- [ ] **Phase 10: Prompt Fixes + Dependency Cleanup** - Remove anchoring, fix bypass flow, guard sample sizes, separate facts from hypotheses, clean dead deps
+- [ ] **Phase 11: Context Foundation + Model Registry** - File-based context system, pre-crisis gap fill, model registry pattern in brief.py
+- [ ] **Phase 12: Contract Discovery + Alignment** - Enumerate all Kalshi child contracts, classify into families, build fair-value estimators, record settlements
+- [ ] **Phase 13: New Capabilities** - Political transition model, rolling daily context, news source diversification
+- [ ] **Phase 14: Unified Ensemble + Resolution Validation** - Single aggregation path for live and backtest, settlement-scored backtest, before/after comparison
+
+## Phase Details
+
+### Phase 10: Prompt Fixes + Dependency Cleanup
+**Goal**: Models produce independent probability estimates from clean inputs -- no anchoring to market prices, no broken cascade data, no noise from tiny sample sizes, no editorial contamination.
+**Depends on**: Phase 3 (extends existing prediction pipeline)
+**Requirements**: PROMPT-01, PROMPT-02, PROMPT-03, PROMPT-04, PROMPT-05, ARCH-04
+**Success Criteria** (what must be TRUE):
+  1. Running `parallax brief` produces predictions where no model prompt contains current market prices before the model states its probability estimate
+  2. Oil price model receives a non-zero bypass_flow value computed from the cascade engine when blockade conditions exist
+  3. Hormuz model outputs exactly one probability that maps to a single contract resolution criterion (not two conflicting specs)
+  4. Track record section in prompts is omitted entirely when fewer than 10 resolved signals exist for that model
+  5. Crisis context injected into prompts contains only dated factual events -- editorial hypotheses are separated and excluded from base context
+**Plans**: TBD
+
+### Phase 11: Context Foundation + Model Registry
+**Goal**: Crisis context is composable and complete (no 6-month gap), and adding a new prediction model requires only a class + registry entry instead of pipeline surgery.
+**Depends on**: Phase 10 (clean prompts before expanding context and model infrastructure)
+**Requirements**: CTX-01, CTX-02, ARCH-01
+**Success Criteria** (what must be TRUE):
+  1. A pre-crisis context document exists covering Aug 2025 through Feb 2026 with dated, verifiable events filling the current 3-bullet-point gap
+  2. `get_crisis_context()` loads context from files on disk (not Python string literals), and context can be date-gated for backtests (e.g., "only events before March 15")
+  3. brief.py discovers and runs prediction models via a registry dict -- adding a fourth model requires only a new predictor class and one registry entry, no changes to pipeline orchestration
+**Plans**: TBD
+
+### Phase 12: Contract Discovery + Alignment
+**Goal**: The system sees the full contract landscape (not just 4 of 12+ event tickers) and knows which contracts each model can price.
+**Depends on**: Phase 11 (needs model registry to map discovered contracts to models)
+**Requirements**: DISC-01, DISC-02, DISC-03, DISC-04
+**Success Criteria** (what must be TRUE):
+  1. Running contract discovery enumerates all child contracts from Kalshi API for all 12 event tickers, persisting ticker, resolution criteria, volume, and settlement status in DuckDB
+  2. Every discovered contract has a proxy classification mapping it to a model type (or marking it as UNMODELED)
+  3. Fair-value estimator functions exist for each new contract family (IRAN_DEMOCRACY, IRAN_LEADERSHIP, PAHLAVI, IRAN_EMBASSY, OIL_RIG) even if the estimator is a simple prior
+  4. All settled contracts have their actual settlement outcome (YES/NO) recorded and are available as ground truth for backtesting
+**Plans**: TBD
+
+### Phase 13: New Capabilities
+**Goal**: The system covers political transition contracts, remembers what it predicted yesterday, and draws from multiple news sources instead of relying solely on Google News RSS.
+**Depends on**: Phase 11 (needs file-based context for rolling context, model registry for political model), Phase 12 (needs discovered political contracts for alignment)
+**Requirements**: ARCH-03, CTX-03, CTX-04, NEWS-01, NEWS-02, NEWS-03
+**Success Criteria** (what must be TRUE):
+  1. A new "Iran political transition" model runs within the pipeline via the model registry and produces PredictionOutput for regime-change contract families
+  2. After each cron run, a structured JSON summary (predictions made, market snapshot, key headlines) is appended to a rolling context store
+  3. Models receive a 5-day rolling context window showing previous predictions and their outcomes, enabling self-correction and temporal awareness
+  4. AP News RSS and at least 2 other sources (from: Al Jazeera, BBC Middle East, EIA weekly petroleum) are integrated with keyword filtering and dedup against existing Google News events
+  5. Adding a new RSS news source requires only a URL and keyword list in configuration, not code changes to the ingestion pipeline
+**Plans**: TBD
+
+### Phase 14: Unified Ensemble + Resolution Validation
+**Goal**: Live pipeline and backtest use identical signal aggregation, and the hold-to-settlement thesis is tested against actual contract outcomes -- not next-day price movement.
+**Depends on**: Phase 12 (needs settled contracts with outcomes), Phase 13 (needs all models running for complete ensemble), Phase 10 (VALID-03 needs before/after prompt comparison)
+**Requirements**: ARCH-02, VALID-01, VALID-02, VALID-03
+**Success Criteria** (what must be TRUE):
+  1. Live pipeline (brief.py) and portfolio simulator use the exact same weighted ensemble aggregation function -- no split-brain divergence between what backtest predicts and what live produces
+  2. Resolution backtest runs improved models against settled contracts and scores predictions against actual YES/NO settlement outcomes (not next-day price movement)
+  3. Settlement-based metrics are computed: hit rate, Brier score, fee-adjusted P&L, and win rate segmented by proxy class
+  4. A before/after comparison exists showing prediction quality with old prompts vs new prompts on the same settled contracts, attributing improvement to specific fixes
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phase 6 → 7 → 8 → 9 (linear dependency chain)
+Phase 10 → 11 → 12 → 13 → 14 (mostly linear, 13 depends on both 11 and 12)
 
 ```
-Phase 6 (Telemetry Foundation)
-    → Phase 7 (Scorecard CLI + Metrics)
-        → Phase 8 (Alerting + Dashboard)
-            → Phase 9 (Feedback Automation + Experiments)
+Phase 10 (Prompt Fixes + Dep Cleanup)
+    → Phase 11 (Context Foundation + Model Registry)
+        → Phase 12 (Contract Discovery + Alignment)
+            → Phase 13 (New Capabilities)  ← also depends on Phase 11
+                → Phase 14 (Unified Ensemble + Resolution Validation)
 ```
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -174,7 +243,12 @@ Phase 6 (Telemetry Foundation)
 | 3. Paper Trading Evaluation | v1.2 | 5/5 | Complete | 2026-04-09 |
 | 4. Deployment Fixes | v1.2 | TBD | Deferred | - |
 | 5. Second Thesis Expansion | v1.2 | TBD | Deferred | - |
-| 6. Telemetry Foundation | v1.3 | 0/TBD | Not started | - |
-| 7. Scorecard CLI + Metrics | v1.3 | 0/TBD | Not started | - |
-| 8. Alerting + Dashboard | v1.3 | 0/TBD | Not started | - |
-| 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Not started | - |
+| 6. Telemetry Foundation | v1.3 | 0/TBD | Deprioritized | - |
+| 7. Scorecard CLI + Metrics | v1.3 | 0/TBD | Deprioritized | - |
+| 8. Alerting + Dashboard | v1.3 | 0/TBD | Deprioritized | - |
+| 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Deprioritized | - |
+| 10. Prompt Fixes + Dep Cleanup | v1.4 | 0/TBD | Not started | - |
+| 11. Context Foundation + Model Registry | v1.4 | 0/TBD | Not started | - |
+| 12. Contract Discovery + Alignment | v1.4 | 0/TBD | Not started | - |
+| 13. New Capabilities | v1.4 | 0/TBD | Not started | - |
+| 14. Unified Ensemble + Resolution Validation | v1.4 | 0/TBD | Not started | - |

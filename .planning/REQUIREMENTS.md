@@ -123,17 +123,37 @@ Moved from active to deferred. Model intelligence has higher ROI than telemetry 
 
 ## Traceability
 
-Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmapper) | | |
+| PROMPT-01 | Phase 10 | Pending |
+| PROMPT-02 | Phase 10 | Pending |
+| PROMPT-03 | Phase 10 | Pending |
+| PROMPT-04 | Phase 10 | Pending |
+| PROMPT-05 | Phase 10 | Pending |
+| ARCH-04 | Phase 10 | Pending |
+| CTX-01 | Phase 11 | Pending |
+| CTX-02 | Phase 11 | Pending |
+| ARCH-01 | Phase 11 | Pending |
+| DISC-01 | Phase 12 | Pending |
+| DISC-02 | Phase 12 | Pending |
+| DISC-03 | Phase 12 | Pending |
+| DISC-04 | Phase 12 | Pending |
+| ARCH-03 | Phase 13 | Pending |
+| CTX-03 | Phase 13 | Pending |
+| CTX-04 | Phase 13 | Pending |
+| NEWS-01 | Phase 13 | Pending |
+| NEWS-02 | Phase 13 | Pending |
+| NEWS-03 | Phase 13 | Pending |
+| ARCH-02 | Phase 14 | Pending |
+| VALID-01 | Phase 14 | Pending |
+| VALID-02 | Phase 14 | Pending |
+| VALID-03 | Phase 14 | Pending |
 
 **Coverage:**
 - v1.4 requirements: 21 total
-- Mapped to phases: TBD
-- Unmapped: TBD
+- Mapped to phases: 21/21
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-12 after v1.4 milestone requirements defined*
+*Last updated: 2026-04-12 after v1.4 roadmap created (Phases 10-14)*

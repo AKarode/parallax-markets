@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Model Intelligence + Resolution Validation
-status: defining_requirements
+status: ready_to_plan
 stopped_at: null
 last_updated: "2026-04-12"
 last_activity: 2026-04-12
 progress:
-  total_phases: 6
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-12)
 
 **Core value:** Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects.
-**Current focus:** Milestone v1.4 — defining requirements
+**Current focus:** Phase 10 — Prompt Fixes + Dependency Cleanup
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 10 of 14 (Prompt Fixes + Dep Cleanup) — first phase of v1.4
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-12 — Milestone v1.4 started
+Status: Ready to plan
+Last activity: 2026-04-12 — Roadmap created for v1.4 (Phases 10-14)
 
 Progress: [░░░░░░░░░░] 0% (v1.4 scope)
 
@@ -46,15 +46,13 @@ Progress: [░░░░░░░░░░] 0% (v1.4 scope)
 
 ### Decisions
 
-- v1.2 Phases 4-5 deferred: Deployment Fixes not critical for CLI-first, Second Thesis blocked on proving edge
-- v1.3 Phases 6-9 deprioritized: Model intelligence has higher ROI than telemetry at current data sparsity
-- Hold-to-settlement confirmed: Round-trip fees 5.5c vs 2.8c hold. No exit logic needed.
+- v1.3 deprioritized for v1.4: Model intelligence has higher ROI than telemetry at current data sparsity
 - Hybrid model architecture: specialized models + generic political model + model registry. Contract-first deferred to v2.0.
-- 8 of 12 event tickers unmodeled — contract discovery phase will catalog and decide coverage
-- Prompt audit found: market price anchoring, Hormuz spec mismatch, bypass_flow=0, hypothesis injection, no track record sample size guard
+- Prompt audit found: market price anchoring, Hormuz spec mismatch, bypass_flow=0, hypothesis injection, no sample size guard
 - Crisis context gap: Aug 2025 - Feb 2026 has only 3 bullet points for 6 months of escalation
-- GDELT dead (429s) — Google News RSS is sole news source
-- Backtest: 46% win rate / -$0.35 P&L scored on next-day movement, not settlement. Resolution testing needed.
+- Research says anchoring removal is highest ROI fix, can ship immediately
+- Split-brain aggregation must be unified before backtest validation is meaningful
+- Only 1 new dep needed (feedparser), 6 dead deps to remove
 
 ### Pending Todos
 
