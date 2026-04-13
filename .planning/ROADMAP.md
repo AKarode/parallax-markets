@@ -155,7 +155,7 @@ Plans:
 
 </details>
 
-### 🚧 v1.4 Model Intelligence + Resolution Validation (In Progress)
+### v1.4 Model Intelligence + Resolution Validation (In Progress)
 
 **Milestone Goal:** Fix structural flaws in how models see data (anchoring, context gaps, single news source) and what they predict against (4 of 12+ event tickers), then validate the hold-to-settlement thesis by scoring against actual settlement outcomes.
 
@@ -177,7 +177,11 @@ Plans:
   3. Hormuz model outputs exactly one probability that maps to a single contract resolution criterion (not two conflicting specs)
   4. Track record section in prompts is omitted entirely when fewer than 10 resolved signals exist for that model
   5. Crisis context injected into prompts contains only dated factual events -- editorial hypotheses are separated and excluded from base context
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 10-01-PLAN.md — Anchoring removal + editorial cleanup: strip market prices from 3 prompts, clean crisis_context.py, remove market_context wiring from brief.py and backtest
+- [ ] 10-02-PLAN.md — Hormuz single probability spec, track record n>=10 guard, bypass_flow fix with WorldState initialization
+- [ ] 10-03-PLAN.md — Remove 6 dead dependencies from pyproject.toml
 
 ### Phase 11: Context Foundation + Model Registry
 **Goal**: Crisis context is composable and complete (no 6-month gap), and adding a new prediction model requires only a class + registry entry instead of pipeline surgery.
@@ -247,7 +251,7 @@ Phase 10 (Prompt Fixes + Dep Cleanup)
 | 7. Scorecard CLI + Metrics | v1.3 | 0/TBD | Deprioritized | - |
 | 8. Alerting + Dashboard | v1.3 | 0/TBD | Deprioritized | - |
 | 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Deprioritized | - |
-| 10. Prompt Fixes + Dep Cleanup | v1.4 | 0/TBD | Not started | - |
+| 10. Prompt Fixes + Dep Cleanup | v1.4 | 0/3 | Planned | - |
 | 11. Context Foundation + Model Registry | v1.4 | 0/TBD | Not started | - |
 | 12. Contract Discovery + Alignment | v1.4 | 0/TBD | Not started | - |
 | 13. New Capabilities | v1.4 | 0/TBD | Not started | - |
