@@ -141,7 +141,7 @@ class TestOilPricePredictor:
         await predictor.predict(SAMPLE_EVENTS, SAMPLE_PRICES, world_state)
 
         stats = budget.stats()
-        assert stats["call_count"] == 1
+        assert stats["call_count"] == 3  # ensemble makes 3 calls
         assert stats["spend_today_usd"] > 0
 
     async def test_empty_events(self, cascade, budget, world_state):
@@ -156,6 +156,26 @@ class TestOilPricePredictor:
         predictor = OilPricePredictor(cascade, budget, mock_client)
         result = await predictor.predict([], SAMPLE_PRICES, world_state)
         assert result.probability == 0.4
+
+    async def test_worldstate_not_mutated(self, cascade, budget):
+        """BUG-01: oil predictor must not mutate the shared WorldState."""
+        mock_client = make_mock_client({
+            "probability": 0.65,
+            "direction": "increase",
+            "magnitude_range": [2.0, 6.0],
+            "reasoning": "Test mutation safety.",
+            "evidence": ["test"],
+        })
+        predictor = OilPricePredictor(cascade, budget, mock_client)
+        ws = WorldState()
+        ws.update_cell(612345678, flow=5_000_000, status="blocked", threat_level=0.9)
+
+        original_snapshot = ws.snapshot()
+        await predictor.predict(SAMPLE_EVENTS, SAMPLE_PRICES, ws)
+        after_snapshot = ws.snapshot()
+
+        # WorldState must be unchanged after prediction
+        assert original_snapshot == after_snapshot
 
     async def test_missing_prices_uses_fallback(self, cascade, budget, world_state):
         mock_client = make_mock_client({

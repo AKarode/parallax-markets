@@ -1,12 +1,11 @@
-"""Oil price prediction model using cascade engine + LLM reasoning.
+"""Oil price prediction model using cascade engine + LLM ensemble.
 
 Combines deterministic cascade analysis (supply disruption scenarios)
-with a single Claude Sonnet call for probabilistic prediction.
+with 3 concurrent Claude Sonnet calls for probabilistic prediction.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 import duckdb
 
 from parallax.budget.tracker import BudgetTracker
+from parallax.prediction.ensemble import ensemble_predict
 from parallax.prediction.schemas import PredictionOutput
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.world_state import WorldState
@@ -83,14 +83,17 @@ class OilPricePredictor:
         else:
             track_record = "No track record available yet."
 
+        # BUG-01 FIX: operate on a copy so cascade mutations don't corrupt shared state
+        ws_copy = world_state.copy()
+
         # Step 1: Cascade analysis
         supply_loss = 0.0
         price_shock_pct = 0.0
 
         # Find Hormuz cells and compute disruption
-        for cell_id, cell_data in self._iter_cells(world_state):
+        for cell_id, cell_data in self._iter_cells(ws_copy):
             if cell_data.get("status") in ("blocked", "restricted"):
-                result = self._cascade.apply_blockade(world_state, cell_id, 0.5)
+                result = self._cascade.apply_blockade(ws_copy, cell_id, 0.5)
                 supply_loss += result.get("supply_loss", 0.0)
 
         # Compute bypass flow from cascade engine
@@ -125,45 +128,36 @@ class OilPricePredictor:
             track_record=track_record,
         )
 
-        response = await self._client.messages.create(
-            model="claude-opus-4-20250514",
+        result = await ensemble_predict(
+            client=self._client,
+            model="claude-sonnet-4-20250514",
+            prompt=prompt,
+            budget=self._budget,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
         )
+        ensemble = result["ensemble"]
+        parsed = result["parsed"]
 
-        # Record budget
-        usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
-
-        # Step 4: Parse response
-        raw_text = response.content[0].text
-        text = raw_text.strip()
-        if text.startswith("```json") or text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:]).strip()
-        if text.endswith("```"):
-            text = text[:-3].rstrip()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse oil_price raw response: %s", raw_text)
-            raise ValueError(
-                f"Failed to parse oil_price LLM response: {text[:200]}",
-            ) from exc
+        confidence = parsed.get("confidence", 0.5)
+        if ensemble["is_unstable"]:
+            confidence *= 0.5
 
         return PredictionOutput(
             model_id="oil_price",
             prediction_type="oil_price_direction",
-            probability=parsed["probability"],
+            probability=ensemble["probability"],
             direction=parsed["direction"],
             magnitude_range=parsed["magnitude_range"],
             unit="USD/bbl",
             timeframe="7d",
-            confidence=parsed.get("confidence", 0.5),
-            reasoning=parsed["reasoning"],
+            confidence=confidence,
+            reasoning=f"{parsed['reasoning']}\n\n[Ensemble: probabilities={ensemble['individual_probabilities']}, method=trimmed_mean, std_dev={ensemble['std_dev']:.3f}]",
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
             kalshi_ticker=None,  # mapped dynamically by brief pipeline
+            ensemble_probabilities=ensemble["individual_probabilities"],
+            ensemble_std_dev=ensemble["std_dev"],
+            ensemble_is_unstable=ensemble["is_unstable"],
         )
 
     @staticmethod
