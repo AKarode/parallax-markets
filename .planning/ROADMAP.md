@@ -198,7 +198,7 @@ Plans:
   5. Budget impact stays under $0.10/run (3x3 = 9 Sonnet calls at ~$0.007 each)
 **Plans**: 2 plans
 Plans:
-- [ ] 10.1-01-PLAN.md — WorldState.copy() + PredictionOutput schema extension + ensemble prediction utility + tests
+- [x] 10.1-01-PLAN.md — WorldState.copy() + PredictionOutput schema extension + ensemble prediction utility + tests
 - [ ] 10.1-02-PLAN.md — Rewire all 3 predictors to use ensemble_predict, fix WorldState mutation bug, switch to Sonnet 4
 
 ### Phase 10.2: Risk Gate Filter
@@ -335,7 +335,7 @@ Phase 10 (Prompt Fixes + Dep Cleanup)  ✅
 | 8. Alerting + Dashboard | v1.3 | 0/TBD | Deprioritized | - |
 | 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Deprioritized | - |
 | 10. Prompt Fixes + Dep Cleanup | v1.4 | 3/3 | Complete    | 2026-04-13 |
-| 10.1. Multi-Call Claude Ensemble | v1.4 | 0/2 | Not started | - |
+| 10.1. Multi-Call Claude Ensemble | v1.4 | 1/2 | In Progress|  |
 | 10.2. Risk Gate Filter | v1.4 | 0/TBD | Not started | - |
 | 11. Context Foundation + Model Registry | v1.4 | 0/TBD | Not started | - |
 | 12. Contract Discovery + Alignment | v1.4 | 0/TBD | Not started | - |
