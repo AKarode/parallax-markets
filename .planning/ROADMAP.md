@@ -161,7 +161,7 @@ Plans:
 **Milestone Goal:** Fix structural flaws in how models see data (anchoring, context gaps, single news source) and what they predict against (4 of 12+ event tickers), then validate the hold-to-settlement thesis by scoring against actual settlement outcomes.
 
 - [x] **Phase 10: Prompt Fixes + Dependency Cleanup** - Remove anchoring, fix bypass flow, guard sample sizes, separate facts from hypotheses, clean dead deps (completed 2026-04-13)
-- [ ] **Phase 10.1: Multi-Call Claude Ensemble** - 3 independent Claude calls per prediction, trimmed mean, reject if std dev >10%. Fix WorldState mutation bug.
+- [x] **Phase 10.1: Multi-Call Claude Ensemble** - 3 independent Claude calls per prediction, trimmed mean, reject if std dev >10%. Fix WorldState mutation bug. (completed 2026-04-15)
 - [ ] **Phase 10.2: Risk Gate Filter** - 5-gate sequential risk filter replacing ad-hoc hard caps (Kelly→liquidity→correlation→concentration→drawdown)
 - [ ] **Phase 11: Context Foundation + Model Registry** - File-based context system, pre-crisis gap fill, model registry pattern in brief.py
 - [ ] **Phase 12: Contract Discovery + Alignment** - Enumerate all Kalshi child contracts, classify into families, build fair-value estimators, record settlements
@@ -199,7 +199,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 10.1-01-PLAN.md — WorldState.copy() + PredictionOutput schema extension + ensemble prediction utility + tests
-- [ ] 10.1-02-PLAN.md — Rewire all 3 predictors to use ensemble_predict, fix WorldState mutation bug, switch to Sonnet 4
+- [x] 10.1-02-PLAN.md — Rewire all 3 predictors to use ensemble_predict, fix WorldState mutation bug, switch to Sonnet 4
 
 ### Phase 10.2: Risk Gate Filter
 **Goal**: Replace ad-hoc hard caps in PortfolioAllocator with a sequential 5-gate risk filter. Each gate can independently block or reduce a trade, providing layered defense against different risk categories.
@@ -335,7 +335,7 @@ Phase 10 (Prompt Fixes + Dep Cleanup)  ✅
 | 8. Alerting + Dashboard | v1.3 | 0/TBD | Deprioritized | - |
 | 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Deprioritized | - |
 | 10. Prompt Fixes + Dep Cleanup | v1.4 | 3/3 | Complete    | 2026-04-13 |
-| 10.1. Multi-Call Claude Ensemble | v1.4 | 1/2 | In Progress|  |
+| 10.1. Multi-Call Claude Ensemble | v1.4 | 2/2 | Complete   | 2026-04-15 |
 | 10.2. Risk Gate Filter | v1.4 | 0/TBD | Not started | - |
 | 11. Context Foundation + Model Registry | v1.4 | 0/TBD | Not started | - |
 | 12. Contract Discovery + Alignment | v1.4 | 0/TBD | Not started | - |
