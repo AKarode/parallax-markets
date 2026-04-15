@@ -1,12 +1,11 @@
 """Hormuz Strait reopening prediction model.
 
 Checks current world state for Hormuz cell status, runs cascade scenarios
-for partial and full reopening, and feeds analysis to Claude Sonnet.
+for partial and full reopening, and feeds analysis to Claude Sonnet ensemble.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 import duckdb
 
 from parallax.budget.tracker import BudgetTracker
+from parallax.prediction.ensemble import ensemble_predict
 from parallax.prediction.schemas import PredictionOutput
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.world_state import WorldState
@@ -103,44 +103,36 @@ class HormuzReopeningPredictor:
             track_record=track_record,
         )
 
-        response = await self._client.messages.create(
-            model="claude-opus-4-20250514",
+        result = await ensemble_predict(
+            client=self._client,
+            model="claude-sonnet-4-20250514",
+            prompt=prompt,
+            budget=self._budget,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
         )
+        ensemble = result["ensemble"]
+        parsed = result["parsed"]
 
-        usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
-
-        # Step 4: Parse
-        raw_text = response.content[0].text
-        text = raw_text.strip()
-        if text.startswith("```json") or text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:]).strip()
-        if text.endswith("```"):
-            text = text[:-3].rstrip()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse hormuz_reopening raw response: %s", raw_text)
-            raise ValueError(
-                f"Failed to parse hormuz_reopening LLM response: {text[:200]}",
-            ) from exc
+        confidence = parsed.get("confidence", 0.5)
+        if ensemble["is_unstable"]:
+            confidence *= 0.5
 
         return PredictionOutput(
             model_id="hormuz_reopening",
             prediction_type="hormuz_reopening",
-            probability=parsed["probability"],
+            probability=ensemble["probability"],
             direction=parsed.get("direction", "stable"),
             magnitude_range=parsed.get("magnitude_range", [0.0, 100.0]),
             unit="pct_reopening",
             timeframe="14d",
-            confidence=parsed.get("confidence", 0.5),
-            reasoning=parsed["reasoning"],
+            confidence=confidence,
+            reasoning=f"{parsed['reasoning']}\n\n[Ensemble: probabilities={ensemble['individual_probabilities']}, method=trimmed_mean, std_dev={ensemble['std_dev']:.3f}]",
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
             kalshi_ticker=None,  # mapped dynamically by brief pipeline
+            ensemble_probabilities=ensemble["individual_probabilities"],
+            ensemble_std_dev=ensemble["std_dev"],
+            ensemble_is_unstable=ensemble["is_unstable"],
         )
 
     @staticmethod
