@@ -36,6 +36,13 @@ Requirements for milestone v1.4: Model Intelligence + Resolution Validation.
 - [ ] **ARCH-03**: New "Iran political transition" model covers regime-change contract families using the standard PredictionOutput interface
 - [ ] **ARCH-04**: Dead dependencies removed from pyproject.toml (h3, sentence-transformers, searoute, shapely, google-cloud-bigquery, websockets)
 
+### Prompt-Contract Alignment (from thesis review 2026-04-15)
+
+- [ ] **ALIGN-01**: Each model prompt asks a question that maps directly to the settlement event/horizon of its target contracts — no horizon/basis mismatches (oil model asks contract-native question, not 7d Brent direction for year-end WTI contracts)
+- [ ] **ALIGN-02**: Ceasefire model renamed to "iran_agreement" (model_id, prediction_type) to match what the prompt actually predicts (formal US-Iran agreement by mid-2027, not 14d ceasefire)
+- [ ] **ALIGN-03**: Proxy class discounts are applied to edge calculation — NEAR_PROXY and LOOSE_PROXY mappings haircut effective edge by their discount factor, not hardcoded 1.0
+- [ ] **ALIGN-04**: Ensemble aggregation accounts for model correlation — signals from models sharing identical inputs are not treated as independent evidence for position sizing
+
 ### News Diversification
 
 - [ ] **NEWS-01**: AP News RSS feeds integrated as news source with keyword filtering and dedup against existing Google News events
@@ -148,12 +155,16 @@ Moved from active to deferred. Model intelligence has higher ROI than telemetry 
 | VALID-01 | Phase 14 | Pending |
 | VALID-02 | Phase 14 | Pending |
 | VALID-03 | Phase 14 | Pending |
+| ALIGN-01 | Phase 11 | Pending |
+| ALIGN-02 | Phase 11 | Pending |
+| ALIGN-03 | Phase 12 | Pending |
+| ALIGN-04 | Phase 14 | Pending |
 
 **Coverage:**
-- v1.4 requirements: 21 total
-- Mapped to phases: 21/21
+- v1.4 requirements: 25 total
+- Mapped to phases: 25/25
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-12 after v1.4 roadmap created (Phases 10-14)*
+*Last updated: 2026-04-15 — added ALIGN-01 through ALIGN-04 from independent thesis review*

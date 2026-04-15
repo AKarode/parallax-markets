@@ -159,7 +159,7 @@ Plans:
 
 **Milestone Goal:** Fix structural flaws in how models see data (anchoring, context gaps, single news source) and what they predict against (4 of 12+ event tickers), then validate the hold-to-settlement thesis by scoring against actual settlement outcomes.
 
-- [ ] **Phase 10: Prompt Fixes + Dependency Cleanup** - Remove anchoring, fix bypass flow, guard sample sizes, separate facts from hypotheses, clean dead deps
+- [x] **Phase 10: Prompt Fixes + Dependency Cleanup** - Remove anchoring, fix bypass flow, guard sample sizes, separate facts from hypotheses, clean dead deps (completed 2026-04-13)
 - [ ] **Phase 11: Context Foundation + Model Registry** - File-based context system, pre-crisis gap fill, model registry pattern in brief.py
 - [ ] **Phase 12: Contract Discovery + Alignment** - Enumerate all Kalshi child contracts, classify into families, build fair-value estimators, record settlements
 - [ ] **Phase 13: New Capabilities** - Political transition model, rolling daily context, news source diversification
@@ -179,29 +179,32 @@ Plans:
   5. Crisis context injected into prompts contains only dated factual events -- editorial hypotheses are separated and excluded from base context
 **Plans**: 3 plans
 Plans:
-- [ ] 10-01-PLAN.md — Anchoring removal + editorial cleanup: strip market prices from 3 prompts, clean crisis_context.py, remove market_context wiring from brief.py and backtest
-- [ ] 10-02-PLAN.md — Hormuz single probability spec, track record n>=10 guard, bypass_flow fix with WorldState initialization
-- [ ] 10-03-PLAN.md — Remove 6 dead dependencies from pyproject.toml
+- [x] 10-01-PLAN.md — Anchoring removal + editorial cleanup: strip market prices from 3 prompts, clean crisis_context.py, remove market_context wiring from brief.py and backtest
+- [x] 10-02-PLAN.md — Hormuz single probability spec, track record n>=10 guard, bypass_flow fix with WorldState initialization
+- [x] 10-03-PLAN.md — Remove 6 dead dependencies from pyproject.toml
 
 ### Phase 11: Context Foundation + Model Registry
-**Goal**: Crisis context is composable and complete (no 6-month gap), and adding a new prediction model requires only a class + registry entry instead of pipeline surgery.
+**Goal**: Crisis context is composable and complete (no 6-month gap), adding a new prediction model requires only a class + registry entry instead of pipeline surgery, and each model prompt asks a question that maps directly to its target contract settlement.
 **Depends on**: Phase 10 (clean prompts before expanding context and model infrastructure)
-**Requirements**: CTX-01, CTX-02, ARCH-01
+**Requirements**: CTX-01, CTX-02, ARCH-01, ALIGN-01, ALIGN-02
 **Success Criteria** (what must be TRUE):
   1. A pre-crisis context document exists covering Aug 2025 through Feb 2026 with dated, verifiable events filling the current 3-bullet-point gap
   2. `get_crisis_context()` loads context from files on disk (not Python string literals), and context can be date-gated for backtests (e.g., "only events before March 15")
   3. brief.py discovers and runs prediction models via a registry dict -- adding a fourth model requires only a new predictor class and one registry entry, no changes to pipeline orchestration
+  4. Oil price model prompt asks a contract-native question (e.g., "Will WTI exceed $X by year-end?") instead of "7d Brent direction" mapped to year-end WTI contracts via extrapolation
+  5. Ceasefire model renamed to iran_agreement (model_id, prediction_type, timeframe) to match what the prompt actually predicts
 **Plans**: TBD
 
 ### Phase 12: Contract Discovery + Alignment
-**Goal**: The system sees the full contract landscape (not just 4 of 12+ event tickers) and knows which contracts each model can price.
+**Goal**: The system sees the full contract landscape (not just 4 of 12+ event tickers), knows which contracts each model can price, and proxy class discounts are actually applied to edge calculations.
 **Depends on**: Phase 11 (needs model registry to map discovered contracts to models)
-**Requirements**: DISC-01, DISC-02, DISC-03, DISC-04
+**Requirements**: DISC-01, DISC-02, DISC-03, DISC-04, ALIGN-03
 **Success Criteria** (what must be TRUE):
   1. Running contract discovery enumerates all child contracts from Kalshi API for all 12 event tickers, persisting ticker, resolution criteria, volume, and settlement status in DuckDB
   2. Every discovered contract has a proxy classification mapping it to a model type (or marking it as UNMODELED)
   3. Fair-value estimator functions exist for each new contract family (IRAN_DEMOCRACY, IRAN_LEADERSHIP, PAHLAVI, IRAN_EMBASSY, OIL_RIG) even if the estimator is a simple prior
   4. All settled contracts have their actual settlement outcome (YES/NO) recorded and are available as ground truth for backtesting
+  5. MappingPolicy applies proxy class discount factors to effective_edge (NEAR_PROXY 0.6x, LOOSE_PROXY 0.3x) instead of hardcoding confidence_discount=1.0
 **Plans**: TBD
 
 ### Phase 13: New Capabilities
@@ -217,14 +220,15 @@ Plans:
 **Plans**: TBD
 
 ### Phase 14: Unified Ensemble + Resolution Validation
-**Goal**: Live pipeline and backtest use identical signal aggregation, and the hold-to-settlement thesis is tested against actual contract outcomes -- not next-day price movement.
+**Goal**: Live pipeline and backtest use identical signal aggregation, model correlation is handled in position sizing, and the hold-to-settlement thesis is tested against actual contract outcomes -- not next-day price movement.
 **Depends on**: Phase 12 (needs settled contracts with outcomes), Phase 13 (needs all models running for complete ensemble), Phase 10 (VALID-03 needs before/after prompt comparison)
-**Requirements**: ARCH-02, VALID-01, VALID-02, VALID-03
+**Requirements**: ARCH-02, VALID-01, VALID-02, VALID-03, ALIGN-04
 **Success Criteria** (what must be TRUE):
   1. Live pipeline (brief.py) and portfolio simulator use the exact same weighted ensemble aggregation function -- no split-brain divergence between what backtest predicts and what live produces
   2. Resolution backtest runs improved models against settled contracts and scores predictions against actual YES/NO settlement outcomes (not next-day price movement)
   3. Settlement-based metrics are computed: hit rate, Brier score, fee-adjusted P&L, and win rate segmented by proxy class
   4. A before/after comparison exists showing prediction quality with old prompts vs new prompts on the same settled contracts, attributing improvement to specific fixes
+  5. Ensemble aggregation accounts for model correlation — signals from models sharing identical inputs (same context, same news, same provider) are not treated as independent evidence for sizing
 **Plans**: TBD
 
 ## Progress
@@ -251,7 +255,7 @@ Phase 10 (Prompt Fixes + Dep Cleanup)
 | 7. Scorecard CLI + Metrics | v1.3 | 0/TBD | Deprioritized | - |
 | 8. Alerting + Dashboard | v1.3 | 0/TBD | Deprioritized | - |
 | 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Deprioritized | - |
-| 10. Prompt Fixes + Dep Cleanup | v1.4 | 0/3 | Planned | - |
+| 10. Prompt Fixes + Dep Cleanup | v1.4 | 3/3 | Complete    | 2026-04-13 |
 | 11. Context Foundation + Model Registry | v1.4 | 0/TBD | Not started | - |
 | 12. Contract Discovery + Alignment | v1.4 | 0/TBD | Not started | - |
 | 13. New Capabilities | v1.4 | 0/TBD | Not started | - |
