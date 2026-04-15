@@ -23,6 +23,9 @@ class PredictionOutput(BaseModel):
     created_at: datetime
     kalshi_ticker: str | None = None  # mapped market ticker
     polymarket_id: str | None = None  # mapped market ID
+    ensemble_probabilities: list[float] | None = None
+    ensemble_std_dev: float | None = None
+    ensemble_is_unstable: bool = False
 
     @field_validator("probability", "confidence")
     @classmethod
