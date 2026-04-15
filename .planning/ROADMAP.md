@@ -6,6 +6,7 @@
 - 📋 **v1.2 Expansion** - Phases 4-5 (deferred)
 - 📋 **v1.3 Daily Feedback Loop + Scorecard** - Phases 6-9 (deprioritized)
 - 🚧 **v1.4 Model Intelligence + Resolution Validation** - Phases 10-14 (in progress)
+- 📋 **v1.5 Edge Engineering** - Phases 15-17 (planned)
 
 ## Phases
 
@@ -160,6 +161,8 @@ Plans:
 **Milestone Goal:** Fix structural flaws in how models see data (anchoring, context gaps, single news source) and what they predict against (4 of 12+ event tickers), then validate the hold-to-settlement thesis by scoring against actual settlement outcomes.
 
 - [x] **Phase 10: Prompt Fixes + Dependency Cleanup** - Remove anchoring, fix bypass flow, guard sample sizes, separate facts from hypotheses, clean dead deps (completed 2026-04-13)
+- [ ] **Phase 10.1: Multi-Call Claude Ensemble** - 3 independent Claude calls per prediction, trimmed mean, reject if std dev >10%. Fix WorldState mutation bug.
+- [ ] **Phase 10.2: Risk Gate Filter** - 5-gate sequential risk filter replacing ad-hoc hard caps (Kelly→liquidity→correlation→concentration→drawdown)
 - [ ] **Phase 11: Context Foundation + Model Registry** - File-based context system, pre-crisis gap fill, model registry pattern in brief.py
 - [ ] **Phase 12: Contract Discovery + Alignment** - Enumerate all Kalshi child contracts, classify into families, build fair-value estimators, record settlements
 - [ ] **Phase 13: New Capabilities** - Political transition model, rolling daily context, news source diversification
@@ -182,6 +185,33 @@ Plans:
 - [x] 10-01-PLAN.md — Anchoring removal + editorial cleanup: strip market prices from 3 prompts, clean crisis_context.py, remove market_context wiring from brief.py and backtest
 - [x] 10-02-PLAN.md — Hormuz single probability spec, track record n>=10 guard, bypass_flow fix with WorldState initialization
 - [x] 10-03-PLAN.md — Remove 6 dead dependencies from pyproject.toml
+
+### Phase 10.1: Multi-Call Claude Ensemble
+**Goal**: Reduce single-call noise and overconfidence by making 3 independent Claude calls per prediction, aggregating via trimmed mean, and rejecting unstable estimates. Fix WorldState mutation bug where oil predictor re-applies blockade to already-disrupted cells.
+**Depends on**: Phase 10 (clean prompts)
+**Requirements**: ENS-01, ENS-02, BUG-01
+**Success Criteria** (what must be TRUE):
+  1. Each predictor (oil_price, ceasefire, hormuz) makes 3 independent Claude calls with varied temperature (0.3, 0.5, 0.7) and uses trimmed mean for final probability
+  2. If std dev across 3 calls exceeds 10pp (0.10), the prediction is flagged as LOW_CONFIDENCE and signal strength is downgraded
+  3. Reasoning output includes all 3 individual probabilities and the aggregation method used
+  4. WorldState is not mutated during oil_price.predict() -- cascade engine operates on a copy, not the shared instance
+  5. Budget impact stays under $0.10/run (3x3 = 9 Sonnet calls at ~$0.007 each)
+**Plans**: 2 plans
+Plans:
+- [ ] 10.1-01-PLAN.md — WorldState.copy() + PredictionOutput schema extension + ensemble prediction utility + tests
+- [ ] 10.1-02-PLAN.md — Rewire all 3 predictors to use ensemble_predict, fix WorldState mutation bug, switch to Sonnet 4
+
+### Phase 10.2: Risk Gate Filter
+**Goal**: Replace ad-hoc hard caps in PortfolioAllocator with a sequential 5-gate risk filter. Each gate can independently block or reduce a trade, providing layered defense against different risk categories.
+**Depends on**: Phase 10 (extends existing allocator)
+**Requirements**: RISK-01, RISK-02, RISK-03
+**Success Criteria** (what must be TRUE):
+  1. Trade authorization runs through 5 sequential gates: (1) Kelly sizing, (2) liquidity check (reject if market volume < threshold), (3) correlation filter (reduce size if correlated positions exist), (4) concentration cap (max % of portfolio in one contract/sector), (5) drawdown breaker (halt new trades if daily loss exceeds 10% or total drawdown exceeds 15%)
+  2. Each gate logs its decision (pass/reduce/block with reason) for audit trail
+  3. Drawdown breaker persists state across pipeline runs (DuckDB) so it survives process restarts
+  4. Existing hard caps (max_open_orders, max_position_size) are preserved as backstops within the gate framework
+  5. brief.py pipeline uses the new gated allocator for all trade authorization
+**Plans**: TBD
 
 ### Phase 11: Context Foundation + Model Registry
 **Goal**: Crisis context is composable and complete (no 6-month gap), adding a new prediction model requires only a class + registry entry instead of pipeline surgery, and each model prompt asks a question that maps directly to its target contract settlement.
@@ -231,17 +261,66 @@ Plans:
   5. Ensemble aggregation accounts for model correlation — signals from models sharing identical inputs (same context, same news, same provider) are not treated as independent evidence for sizing
 **Plans**: TBD
 
+### v1.5 Edge Engineering (Planned)
+
+**Milestone Goal:** Transform Parallax from "LLM with scaffolding" into a principled hybrid pricing engine -- Bayesian evidence aggregation replaces black-box prompting, multi-provider ensemble reduces single-model risk, and cascade engine is upgraded from linear approximation to richer physical-flow model.
+
+- [ ] **Phase 15: Bayesian Evidence Aggregation** - Log-likelihood ratios per evidence item, A-D source grading, correlation-adjusted clustering, replaces single-shot LLM probability
+- [ ] **Phase 16: Multi-Provider Ensemble** - Add GPT/Gemini as alternative prediction providers, weighted voting with consensus threshold
+- [ ] **Phase 17: Cascade Engine Upgrade** - Upgrade from simple linear cascade to richer physical-flow/insurance/routing model for oil contracts
+
+### Phase 15: Bayesian Evidence Aggregation
+**Goal**: Replace single-shot LLM probability outputs with a structured evidence decomposition and Bayesian aggregation pipeline. Each news item / data point gets an explicit log-likelihood ratio, evidence is clustered by source with correlation adjustments, and the final probability is computed via principled math rather than LLM vibes.
+**Depends on**: Phase 11 (needs model registry), Phase 14 (needs unified aggregation path)
+**Requirements**: BAYES-01, BAYES-02, BAYES-03, BAYES-04
+**Success Criteria** (what must be TRUE):
+  1. Each prediction decomposes evidence into structured items with polarity (+1/-1), type grade (A-D), verifiability score, and recency weight
+  2. Evidence items are clustered by source/origin with effective count formula: m_eff = m / (1 + (m-1) * rho) where rho controls intra-cluster correlation
+  3. Per-cluster log-likelihood ratios are aggregated in log-odds space using trimmed mean (20% trim) to produce pNeutral
+  4. Evidence type caps limit any single item's influence: A=1.0, B=0.6, C=0.3, D=0.2
+  5. Leave-one-out influence analysis identifies which evidence items moved the prediction most, logged for debugging
+**Plans**: TBD
+
+### Phase 16: Multi-Provider Ensemble
+**Goal**: Reduce single-model risk by running predictions through multiple LLM providers and requiring consensus before generating trade signals. Different models have different failure modes -- ensemble voting smooths out provider-specific biases.
+**Depends on**: Phase 11 (needs model registry for clean provider abstraction), Phase 10.1 (multi-call pattern established)
+**Requirements**: PROV-01, PROV-02, PROV-03
+**Success Criteria** (what must be TRUE):
+  1. Prediction pipeline supports at least 3 providers (Claude, GPT, Gemini) via a provider abstraction that shares the same prompt template and structured output schema
+  2. Weighted voting aggregation: configurable weights per provider (default: Claude 40%, GPT 30%, Gemini 30%), with consensus threshold requiring 2/3 agreement on signal direction
+  3. Provider disagreement (no consensus) results in HOLD signal regardless of individual edge estimates
+  4. Per-provider accuracy tracking enables weight auto-adjustment after sufficient resolved signals (n>=30)
+  5. Total LLM cost stays under $20/day budget with 3 providers x 3 models x 2 runs/day
+**Plans**: TBD
+
+### Phase 17: Cascade Engine Upgrade
+**Goal**: Upgrade the cascade engine from a simple linear model (PRICE_ELASTICITY = 3.0) to a richer physical-flow model that accounts for inventory buffers, OPEC spare capacity, seasonal demand curves, and insurance market feedback loops -- specifically for oil contract pricing.
+**Depends on**: Phase 12 (needs full contract landscape for oil families), Phase 15 (Bayesian aggregation provides the evidence framework)
+**Requirements**: CASCADE-01, CASCADE-02, CASCADE-03
+**Success Criteria** (what must be TRUE):
+  1. Cascade engine incorporates at least 3 additional factors beyond current linear elasticity: OPEC spare capacity buffer, strategic petroleum reserve levels, and seasonal demand adjustment
+  2. Insurance cost feedback loop: shipping insurance spikes feed back into effective supply cost, not just treated as a downstream effect
+  3. Cascade outputs include confidence intervals (not just point estimates) reflecting parameter uncertainty
+  4. Oil price predictions using upgraded cascade show measurable improvement on settled contracts vs the simple linear model (A/B comparison on historical data)
+  5. Cascade parameters are configurable via scenario YAML, not hardcoded
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phase 10 → 11 → 12 → 13 → 14 (mostly linear, 13 depends on both 11 and 12)
+Phase 10 → 10.1 → 10.2 → 11 → 12 → 13 → 14 → 15 → 16 → 17
 
 ```
-Phase 10 (Prompt Fixes + Dep Cleanup)
-    → Phase 11 (Context Foundation + Model Registry)
-        → Phase 12 (Contract Discovery + Alignment)
-            → Phase 13 (New Capabilities)  ← also depends on Phase 11
-                → Phase 14 (Unified Ensemble + Resolution Validation)
+Phase 10 (Prompt Fixes + Dep Cleanup)  ✅
+    → Phase 10.1 (Multi-Call Claude Ensemble)
+    → Phase 10.2 (Risk Gate Filter)
+        → Phase 11 (Context Foundation + Model Registry)
+            → Phase 12 (Contract Discovery + Alignment)
+                → Phase 13 (New Capabilities)  ← also depends on Phase 11
+                    → Phase 14 (Unified Ensemble + Resolution Validation)
+                        → Phase 15 (Bayesian Evidence Aggregation)
+                            → Phase 16 (Multi-Provider Ensemble)
+                            → Phase 17 (Cascade Engine Upgrade)
 ```
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -256,7 +335,12 @@ Phase 10 (Prompt Fixes + Dep Cleanup)
 | 8. Alerting + Dashboard | v1.3 | 0/TBD | Deprioritized | - |
 | 9. Feedback Automation + Experiments | v1.3 | 0/TBD | Deprioritized | - |
 | 10. Prompt Fixes + Dep Cleanup | v1.4 | 3/3 | Complete    | 2026-04-13 |
+| 10.1. Multi-Call Claude Ensemble | v1.4 | 0/2 | Not started | - |
+| 10.2. Risk Gate Filter | v1.4 | 0/TBD | Not started | - |
 | 11. Context Foundation + Model Registry | v1.4 | 0/TBD | Not started | - |
 | 12. Contract Discovery + Alignment | v1.4 | 0/TBD | Not started | - |
 | 13. New Capabilities | v1.4 | 0/TBD | Not started | - |
 | 14. Unified Ensemble + Resolution Validation | v1.4 | 0/TBD | Not started | - |
+| 15. Bayesian Evidence Aggregation | v1.5 | 0/TBD | Not started | - |
+| 16. Multi-Provider Ensemble | v1.5 | 0/TBD | Not started | - |
+| 17. Cascade Engine Upgrade | v1.5 | 0/TBD | Not started | - |
