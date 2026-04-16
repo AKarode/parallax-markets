@@ -14,15 +14,15 @@ Instead of just reading headlines, the system simulates physical supply chain ef
  │ Google News RSS  │          │ 3 Prediction Models   │         │ Divergence       │
  │ GDELT DOC API    │────────▶ │ (Claude Opus x3 each) │────────▶│ Detector         │
  │ EIA Oil Prices   │          │                       │         │                  │
- │ Truth Social     │          │ + Cascade Engine       │         │ BUY / SELL /     │
+ │ Truth Social     │          │ + Cascade Engine      │         │ BUY / SELL /     │
  └──────────────────┘          │   (6-rule physical    │         │ HOLD signals     │
                                │    supply chain sim)  │         │                  │
  ┌──────────────────┐          └───────────────────────┘         └────────┬─────────┘
  │ Kalshi API       │                                                     │
- │ Polymarket API   │──── live market prices ────────────────────────────▶ │
+ │ Polymarket API   │──── live market prices ────────────────────────────▶│
  └──────────────────┘                                            ┌────────▼─────────┐
-                                                                 │ Paper Trading     │
-                                                                 │ (Kalshi sandbox)  │
+                                                                 │ Paper Trading    │
+                                                                 │ (Kalshi sandbox) │
                                                                  └──────────────────┘
 ```
 
