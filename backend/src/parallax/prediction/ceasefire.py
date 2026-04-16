@@ -1,12 +1,11 @@
 """Ceasefire probability prediction model.
 
 Filters GDELT events for diplomatic signals (CAMEO codes 03/04 = cooperation),
-feeds diplomatic event chain to Claude Sonnet for probability estimation.
+feeds diplomatic event chain to Claude Sonnet ensemble for probability estimation.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,27 +13,29 @@ from typing import Any
 import duckdb
 
 from parallax.budget.tracker import BudgetTracker
+from parallax.prediction.ensemble import ensemble_predict
 from parallax.prediction.schemas import PredictionOutput
 
 logger = logging.getLogger(__name__)
 
-CEASEFIRE_SYSTEM_PROMPT = """You are a geopolitical analyst specializing in conflict resolution. Given these recent diplomatic events about Iran-US negotiations, estimate the probability of a ceasefire holding through the next 14 days.
+CEASEFIRE_SYSTEM_PROMPT = """You are a geopolitical analyst specializing in conflict resolution. Given these recent diplomatic events about Iran-US negotiations, estimate the probability that a formal US-Iran agreement will be reached by mid-2027.
+
+IMPORTANT: You are predicting a FORMAL AGREEMENT — a signed deal, framework accord, or binding diplomatic agreement between the US and Iran. This is NOT about whether a ceasefire holds day-to-day. A ceasefire holding is necessary but NOT sufficient — many ceasefires never produce formal agreements.
 
 Consider:
-- Talks location and formality
-- Mediator involvement (Qatar, Oman, Switzerland)
+- Current negotiation stage (back-channel vs. formal talks vs. near-framework)
+- Historical base rate: US-Iran formal agreements are extremely rare (JCPOA took 2+ years of formal talks)
+- Mediator involvement and track record (Qatar, Oman, Switzerland)
+- Domestic political constraints on both sides (US election cycle, Iranian hardliners)
 - Military posture signals (deployments, exercises, withdrawals)
-- Historical precedent for similar diplomatic configurations
-- Economic pressure indicators
+- Sanctions relief dynamics and economic pressure
+- Gap between ceasefire/de-escalation and formal agreement
 
 Recent diplomatic events:
 {diplomatic_events}
 
 Additional context:
 {context}
-
-Current market prices:
-{market_prices_text}
 
 ## YOUR TRACK RECORD
 {track_record}
@@ -43,7 +44,7 @@ Consider what the market may already be pricing in and where it might be wrong.
 
 Output ONLY valid JSON (no markdown):
 {{
-  "probability": <float 0-1, probability of ceasefire holding>,
+  "probability": <float 0-1, probability of formal US-Iran agreement by mid-2027>,
   "confidence": <float 0-1, how confident you are in this estimate>,
   "direction": "<increase|decrease|stable>",
   "magnitude_range": [<low>, <high>],
@@ -70,7 +71,6 @@ class CeasefirePredictor:
         self,
         recent_events: list[dict],
         current_negotiations: str | None = None,
-        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run ceasefire prediction pipeline.
@@ -93,51 +93,44 @@ class CeasefirePredictor:
         events_text = self._format_events(diplomatic) if diplomatic else self._format_events(recent_events[:5])
         context = current_negotiations or "No specific negotiation context provided."
 
-        prompt = CEASEFIRE_SYSTEM_PROMPT.format(
+        from parallax.prediction.crisis_context import get_crisis_context
+
+        prompt = get_crisis_context() + "\n\n" + CEASEFIRE_SYSTEM_PROMPT.format(
             diplomatic_events=events_text,
             context=context,
-            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
-        response = await self._client.messages.create(
+        result = await ensemble_predict(
+            client=self._client,
             model="claude-opus-4-20250514",
+            prompt=prompt,
+            budget=self._budget,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
         )
+        ensemble = result["ensemble"]
+        parsed = result["parsed"]
 
-        usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
-
-        # Step 3: Parse response
-        raw_text = response.content[0].text
-        text = raw_text.strip()
-        if text.startswith("```json") or text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:]).strip()
-        if text.endswith("```"):
-            text = text[:-3].rstrip()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse ceasefire raw response: %s", raw_text)
-            raise ValueError(
-                f"Failed to parse ceasefire LLM response: {text[:200]}",
-            ) from exc
+        confidence = parsed.get("confidence", 0.5)
+        if ensemble["is_unstable"]:
+            confidence *= 0.5
 
         return PredictionOutput(
             model_id="ceasefire",
             prediction_type="ceasefire_probability",
-            probability=parsed["probability"],
+            probability=ensemble["probability"],
             direction=parsed.get("direction", "stable"),
             magnitude_range=parsed.get("magnitude_range", [0.0, 1.0]),
             unit="probability",
             timeframe="14d",
-            confidence=parsed.get("confidence", 0.5),
-            reasoning=parsed["reasoning"],
+            confidence=confidence,
+            reasoning=f"{parsed['reasoning']}\n\n[Ensemble: probabilities={ensemble['individual_probabilities']}, method=trimmed_mean, std_dev={ensemble['std_dev']:.3f}]",
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
             kalshi_ticker=None,  # mapped dynamically by brief pipeline
+            ensemble_probabilities=ensemble["individual_probabilities"],
+            ensemble_std_dev=ensemble["std_dev"],
+            ensemble_is_unstable=ensemble["is_unstable"],
         )
 
     @staticmethod
@@ -187,13 +180,3 @@ class CeasefirePredictor:
                 lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _format_market_prices(market_prices: list[dict] | None) -> str:
-        if not market_prices:
-            return "No market prices available."
-        lines = []
-        for mp in market_prices:
-            price = mp.get("derived_yes_price") or mp.get("yes_price")
-            price_str = f"{price:.0%}" if price is not None else "N/A"
-            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {price_str}")
-        return "\n".join(lines)

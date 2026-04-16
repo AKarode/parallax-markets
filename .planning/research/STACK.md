@@ -1,375 +1,326 @@
 # Technology Stack
 
-**Project:** Parallax - Geopolitical Crisis Simulation Platform
-**Researched:** 2026-03-30
-**Focus:** Eval framework, backend API, end-to-end pipeline wiring
-**Overall Confidence:** MEDIUM (based primarily on training data + codebase analysis; WebSearch/Context7 unavailable this session)
+**Project:** Parallax v1.4 -- Model Intelligence + Resolution Validation
+**Researched:** 2026-04-12
+**Focus:** RSS diversification, Twitter/X journalist monitoring, oil-specific feeds, file-based context, rolling JSON context, Kalshi contract enumeration, model registry pattern
+**Overall Confidence:** HIGH (verified against official docs, PyPI, Kalshi API docs)
 
-## Existing Stack (Locked In)
-
-These are already in the codebase and should NOT change. Listed for completeness.
+## Existing Stack (Locked In -- DO NOT CHANGE)
 
 | Technology | Version | Purpose |
 |------------|---------|---------|
 | Python | 3.12 | Backend runtime |
-| FastAPI | 0.115+ | REST/WebSocket API server |
-| Uvicorn | 0.34+ | ASGI server |
+| FastAPI | 0.115+ | REST API server |
 | DuckDB | 1.2+ | Embedded OLAP database |
-| H3 | 4.1+ | Hexagonal geospatial indexing |
-| Anthropic SDK | 0.52+ | Claude API for agent reasoning |
-| sentence-transformers | 3.4+ | Semantic dedup embeddings |
-| Pydantic | 2.10+ | Data validation and serialization |
+| Anthropic SDK | 0.52+ | Claude API for predictions |
+| Pydantic | 2.10+ | Data validation |
 | httpx | 0.28+ | Async HTTP client |
-| websockets | 14.0+ | WebSocket support |
-| React | 18.3.1 | Frontend UI framework |
-| Vite | 6.0.0 | Frontend build tool |
-| TypeScript | 5.6.2 | Frontend type safety |
-| deck.gl | 9.1.0 | Geospatial visualization |
-| MapLibre GL | 4.7.0 | Map rendering |
-| Docker Compose | -- | Container orchestration |
+| cryptography | 44.0+ | Kalshi RSA-PSS auth |
+| truthbrush | 0.2+ | Truth Social ingestion |
+| React/Vite/TS | 18.3/6.0/5.6 | Frontend dashboard |
 
-## New Stack Recommendations
+## Recommended Stack Additions
 
-### 1. Eval Framework
+### 1. RSS Feed Parsing: feedparser
 
-#### Scoring Engine: Custom (No External Library)
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| feedparser | >=6.0.11 | Universal RSS/Atom parser | Battle-tested (15+ years), handles malformed XML, auto-detects feed format. Replaces manual `xml.etree.ElementTree` parsing in `google_news.py`. |
 
-**Recommendation:** Implement Brier score, calibration, and direction/magnitude scoring directly. Do NOT add a prediction-market or ML-eval library.
+**Confidence:** HIGH (verified on PyPI -- v6.0.12 released Sep 2025, production-stable)
 
-**Confidence:** HIGH
+**Rationale:** The existing `google_news.py` hand-rolls RSS parsing with `xml.etree.ElementTree`. This works for Google News (clean XML) but will break on edge-case feeds from Reuters/AP RSS generators. feedparser handles encoding issues, malformed dates, namespace variations, and CDF/Atom feeds that raw ET cannot.
 
-**Rationale:**
-- The predictions table already has `score_direction`, `score_magnitude`, `miss_tag`, `ground_truth`, `confidence` fields -- the schema is purpose-built for custom scoring
-- Brier score is `(confidence - outcome)^2` -- 3 lines of Python, no library needed
-- Calibration curves are binning + averaging -- trivially implementable with numpy (already a transitive dependency via sentence-transformers)
-- ML eval frameworks (scikit-learn metrics, Weights & Biases) are overkill for ~50 agents making ~10-20 predictions/day
-- Domain-specific scoring (direction accuracy, magnitude range hit, timeliness) cannot be captured by generic frameworks
+**Integration point:** New `ingestion/rss_feeds.py` module. Same `NewsEvent` dataclass output as `google_news.py`. Plugs into `_fetch_gdelt_events()` in `brief.py` alongside existing sources.
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Brier scoring | Custom Python | 3 lines, no dependency warranted |
-| Calibration curves | numpy | Already transitive dep; bin predictions by confidence, compare to hit rate |
-| Direction accuracy | Custom Python | Boolean: predicted direction matches actual |
-| Magnitude scoring | Custom Python | Check if actual value falls in predicted `magnitude_range` |
-| Ground truth fetching | httpx (existing) | EIA API for oil prices, GDELT for event verification |
-| Eval persistence | DuckDB (existing) | `eval_results` table already in schema |
-| Eval scheduling | asyncio + cron pattern | Daily eval loop as async task in the main event loop |
+**What NOT to do:** Do not replace the Google News RSS parser with feedparser. Google News feeds are clean and the existing ET parser is fast. Use feedparser only for new third-party feeds where XML quality is unknown.
 
-**What NOT to use:**
-- `scikit-learn` metrics -- pulls in heavy ML stack for simple math; you already have numpy
-- `Weights & Biases` / `MLflow` -- designed for ML experiment tracking, not geopolitical prediction scoring; adds infra complexity
-- `Metaculus API` / prediction market APIs -- interesting for benchmarking later, but not for core scoring
-- `promptfoo` / `ragas` -- LLM eval frameworks test prompt quality, not prediction accuracy; different problem
+### 2. Twitter/X Journalist Monitoring: httpx (existing) + manual API calls
 
-#### Prompt Improvement Pipeline
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| (no new dependency) | -- | X API v2 via httpx | httpx already handles async HTTP. X API v2 is a simple REST API with bearer token auth. Adding tweepy or xdk for 2-3 endpoints is unnecessary bloat. |
 
-**Recommendation:** Store eval scores per (agent_id, prompt_version) in DuckDB. Use a simple "promote/demote" loop: if agent accuracy drops below threshold, generate a revised system prompt via Claude and store it as a new version.
+**Confidence:** HIGH (X API v2 docs verified, httpx already in stack)
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Prompt versioning | DuckDB `agent_prompts` table | Already exists with (agent_id, version) PK |
-| Score aggregation | DuckDB SQL | Aggregate eval_results by agent_id, prompt_version |
-| Prompt generation | Anthropic SDK (existing) | Use Claude to rewrite underperforming prompts based on miss patterns |
-| A/B comparison | Custom Python | Compare eval scores across prompt versions for same agent |
+**Rationale -- why NOT tweepy or xdk:**
 
-**Confidence:** MEDIUM -- the prompt-improvement-via-LLM approach is experimental. The storage and scoring parts are straightforward.
+- **tweepy** (community library, mature): Adds a large dependency for what amounts to `GET /2/users/:id/tweets` with a bearer token. The project already uses httpx for every external API call. Adding tweepy introduces a second HTTP client with its own connection pooling, retry logic, and rate limiting that conflicts with httpx patterns.
 
----
+- **xdk** (official X SDK, launched early 2026): Too young. Documentation is thin. Auto-generated code means poor error messages. The project's API usage is read-only and simple enough that raw httpx calls with a thin wrapper suffice.
 
-### 2. Backend API Layer
+**X API pricing reality (as of Feb 2026):**
+- Free tier is dead. Pay-per-use is the only option for new developers.
+- Cost: $0.005 per post read. No search endpoint on pay-per-use.
+- For monitoring ~10 journalist accounts, 2x/day, reading last 20 tweets each: ~400 reads/day = $2/day = $60/month.
+- **This is viable under the $20/day budget** (LLM calls are ~$0.02/run, leaving $19.98/day headroom).
+- However: no search endpoint means you MUST use user timeline lookups, not keyword search.
 
-#### WebSocket: Use FastAPI's Built-in WebSocket Support
+**Implementation approach:** Create `ingestion/x_journalists.py` that:
+1. Accepts a list of X user IDs (not handles -- API v2 requires IDs)
+2. Calls `GET /2/users/:id/tweets` with bearer token auth via httpx
+3. Filters for Iran/oil keywords (same pattern as `truth_social.py`)
+4. Returns `NewsEvent` objects
 
-**Recommendation:** Use `fastapi.WebSocket` directly. Do NOT add Socket.IO or a separate WebSocket server.
+**Env var needed:** `X_BEARER_TOKEN` (from X Developer Portal pay-per-use account)
 
-**Confidence:** HIGH
+### 3. Oil-Specific Data Feeds: EIA API v2 (existing) + no new deps
 
-**Rationale:**
-- FastAPI has native WebSocket support via Starlette -- no additional dependency
-- The project already has `websockets>=14.0` in deps (used by Uvicorn for WS protocol handling)
-- Socket.IO adds a compatibility layer + client library for features you don't need (rooms, namespaces, fallback polling) -- this is a single-analyst tool
-- The nginx config already proxies `/ws` to the backend
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| (no new dependency) | -- | EIA API v2 weekly petroleum data | Already using EIA for daily spot prices. Weekly inventory data uses the same API, different endpoint path. |
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| WebSocket endpoint | `fastapi.WebSocket` | Native, zero new deps, Starlette-backed |
-| Connection management | Custom `ConnectionManager` class | Track active connections, broadcast to all |
-| Message serialization | Pydantic models + `.model_dump_json()` | Type-safe messages, already using Pydantic everywhere |
-| Heartbeat/keepalive | Ping/pong frames | Built into websockets protocol, Uvicorn handles it |
-| Client reconnection | Frontend `useWebSocket` hook (existing) | Already built with auto-reconnect |
+**Confidence:** HIGH (EIA API v2 structure verified)
 
-**Message types to define (Pydantic models):**
+**Rationale -- what to add vs what to skip:**
+
+**ADD: EIA Weekly Petroleum Status Report** (free, same API key)
+- Endpoint: `https://api.eia.gov/v2/petroleum/sum/sndw/data/` (weekly supply/demand)
+- Facets: `process=SAX` (crude oil stocks), `process=SABS` (total petroleum), etc.
+- Provides: crude inventory changes, imports, refinery utilization
+- Oil traders treat the Wednesday 10:30 AM EST release as a major event. This data directly feeds oil price predictions.
+- Integration: Extend existing `ingestion/oil_prices.py` with `fetch_weekly_inventory()` function.
+
+**SKIP: Platts/Argus** (enterprise pricing, inaccessible)
+- S&P Global Platts: Enterprise-only. Minimum ~$10K/year. Rate limit 5000 queries/day but requires accreditation. Not viable for a $20/day budget project.
+- Argus Media: Same tier. Enterprise API access only.
+- OilPriceAPI.com: Free tier is 1000 requests/month. Provides real-time Brent/WTI. Could supplement EIA for intraday prices but EIA daily spot is sufficient for twice-daily cron.
+
+**SKIP: Additional oil price APIs** -- EIA daily spot (already integrated) + EIA weekly inventory (same API) covers the need. The models run twice daily, not intraday. Real-time Brent prices from a third-party API add cost and complexity for minimal signal improvement.
+
+### 4. File-Based Context Management: stdlib pathlib + json (no new deps)
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| (no new dependency) | -- | Load crisis context from .md/.json files instead of Python strings | stdlib `pathlib.Path.read_text()` and `json` module are sufficient. No template engine needed. |
+
+**Confidence:** HIGH (pure Python, no external dependencies)
+
+**Rationale:** The current `crisis_context.py` stores a 3KB+ string literal as `CRISIS_TIMELINE`. This works but has problems:
+1. Updating context requires editing Python code (syntax errors possible)
+2. Cannot be updated by non-developers or automated processes
+3. No separation between the context data and the code that loads it
+
+**Implementation approach:**
+- Move `CRISIS_TIMELINE` content to `backend/data/context/crisis_timeline.md` (Markdown file)
+- Move pre-crisis gap context to `backend/data/context/pre_crisis_aug25_feb26.md`
+- `crisis_context.py` becomes a loader: `Path("data/context/crisis_timeline.md").read_text()`
+- Context files are version-controlled like code but editable as plain text
+
+**What NOT to do:**
+- Do not use Jinja2 or any template engine. Context files are plain text injected verbatim into prompts. Template syntax adds complexity and attack surface for prompt injection.
+- Do not store context in DuckDB. These are static reference documents, not queryable data. Filesystem is simpler and version-controllable.
+
+### 5. Rolling JSON Context: stdlib json + DuckDB (no new deps)
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| (no new dependency) | -- | Append-per-run structured context, read-last-N-days window | DuckDB already stores run data. JSON serialization is stdlib. No need for a separate time-series store. |
+
+**Confidence:** HIGH (pure Python + existing DuckDB)
+
+**Rationale:** Each cron run should append a structured summary (predictions, key news, market state) that subsequent runs can read for multi-day context. Two viable approaches:
+
+**Option A: JSON files on disk** (simpler, recommended for v1.4)
+- Write `backend/data/context/rolling/{date}.json` per run
+- Read last N files by sorting filenames
+- Pros: Human-readable, git-trackable, trivial to inspect/edit
+- Cons: No query capability, manual cleanup of old files
+
+**Option B: DuckDB table** (more queryable, recommended for v2.0)
+- New `rolling_context` table with `run_id`, `run_date`, `context_json` columns
+- Query: `SELECT context_json FROM rolling_context WHERE run_date >= ? ORDER BY run_date DESC LIMIT ?`
+- Pros: SQL queries, atomic writes, no file system management
+- Cons: Harder to manually inspect, tied to DB lifecycle
+
+**Recommendation:** Use Option A (JSON files) for v1.4. The rolling context is model input, not analytical data. Files are easier to debug and manually correct during the validation window (April 7-21). Migrate to DuckDB table in v2.0 when the system is proven.
+
+**Schema for rolling context JSON:**
+```json
+{
+  "run_id": "uuid",
+  "run_date": "2026-04-12",
+  "run_time": "08:00:00Z",
+  "predictions": {
+    "oil_price": {"probability": 0.72, "direction": "increase"},
+    "ceasefire": {"probability": 0.62, "direction": "stable"},
+    "hormuz": {"probability": 0.35, "direction": "increase"}
+  },
+  "key_news": ["headline 1", "headline 2"],
+  "market_snapshot": {
+    "KXWTIMAX-26DEC31": {"yes_price": 0.42},
+    "KXUSAIRANAGREEMENT-27": {"yes_price": 0.48}
+  },
+  "self_correction": {
+    "previous_oil_prob": 0.68,
+    "actual_market_move": "+2.3%",
+    "calibration_note": "Overestimated by 4%"
+  }
+}
+```
+
+### 6. Kalshi Contract Enumeration: httpx (existing) + Kalshi API v2 (already integrated)
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| (no new dependency) | -- | Enumerate all child contracts from event tickers via Kalshi API v2 | `KalshiClient` already calls `/markets` with `event_ticker` param. Contract enumeration is a new method on the existing client, not a new dependency. |
+
+**Confidence:** HIGH (verified against Kalshi API docs at docs.kalshi.com)
+
+**Key API endpoints for contract discovery:**
+
+1. **`GET /events/{event_ticker}?with_nested_markets=true`** -- returns event metadata + all child market objects in a single call. This is the primary endpoint for discovery.
+
+2. **`GET /events?series_ticker={series}&with_nested_markets=true`** -- list all events in a series with their markets. Useful for finding new event tickers.
+
+3. **`GET /markets?event_ticker={ticker}&status=open&limit=200`** -- already used in `brief.py` `_fetch_kalshi_markets()`. Extend with `status=settled` to find resolved contracts for backtesting.
+
+4. **Pagination:** Cursor-based. Response includes `cursor` field. Pass as query param for next page. Empty cursor = no more results. Limit: 1-200 for events, 1-1000 for markets.
+
+**Implementation approach:** Add methods to existing `KalshiClient`:
+- `discover_contracts(event_ticker) -> list[dict]` -- calls GET /events with nested markets
+- `get_settled_contracts(event_ticker) -> list[dict]` -- calls GET /markets with status=settled
+- `get_event_details(event_ticker) -> dict` -- calls GET /events/{ticker}
+
+**Important caveat from Kalshi docs:** "Historical markets settled before the historical cutoff will not be included." This means very old settled contracts may not be available. Test with known Iran event tickers to confirm availability.
+
+### 7. Model Registry Pattern: No external library needed
+
+| Technology | Version | Purpose | Why |
+|------------|---------|---------|-----|
+| (no new dependency) | -- | Registry pattern with decorator-based self-registration | Pure Python pattern using a dict registry + `@register` decorator. No framework needed. |
+
+**Confidence:** HIGH (well-established Python pattern, no dependencies)
+
+**Rationale:** The current `brief.py` hardcodes 3 model instantiations:
+```python
+oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
+ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
+hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
+```
+
+Adding a 4th model (Iran political transition) requires editing `brief.py`. The registry pattern makes models self-registering:
 
 ```python
-class WSMessage(BaseModel):
-    type: Literal["event", "decision", "indicator", "world_state", "eval"]
-    payload: dict
-    tick: int
-    timestamp: datetime
-```
+# prediction/registry.py
+MODEL_REGISTRY: dict[str, type] = {}
 
-**What NOT to use:**
-- `python-socketio` -- adds rooms/namespaces/polling fallback, none needed for single-analyst tool
-- `channels` (Django) -- wrong framework
-- Separate WebSocket process -- unnecessary complexity; FastAPI handles WS and REST in same process
-- `sse-starlette` (Server-Sent Events) -- one-directional; you need bidirectional for simulation control commands (start/pause/step)
+def register_model(model_id: str):
+    def decorator(cls):
+        MODEL_REGISTRY[model_id] = cls
+        return cls
+    return decorator
 
-#### REST API: FastAPI with Standard Patterns
+def get_registered_models() -> dict[str, type]:
+    return dict(MODEL_REGISTRY)
 
-**Recommendation:** Use FastAPI dependency injection for shared state (DuckDB connection, simulation engine, world state). Use `APIRouter` for modular organization.
+# prediction/oil_price.py
+@register_model("oil_price")
+class OilPricePredictor:
+    ...
 
-**Confidence:** HIGH
-
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Route organization | `fastapi.APIRouter` | Group by domain: `/api/simulation`, `/api/agents`, `/api/eval`, `/api/indicators` |
-| Shared state | FastAPI `Depends()` + app.state | DI for DbWriter, WorldState, SimulationEngine |
-| Request validation | Pydantic v2 models | Already the project standard |
-| Response serialization | Pydantic `.model_dump()` | Consistent with rest of codebase |
-| Background tasks | `fastapi.BackgroundTasks` + asyncio tasks | For long-running ops like "run eval now" |
-| Error handling | FastAPI exception handlers | Structured error responses |
-
-**API route structure:**
-
-```
-GET  /api/simulation/status      -- current tick, clock mode, queue depth
-POST /api/simulation/start       -- start live mode
-POST /api/simulation/pause       -- pause
-POST /api/simulation/step        -- advance one tick (replay)
-GET  /api/agents                 -- list all agents with latest scores
-GET  /api/agents/{id}/decisions  -- decision history
-GET  /api/agents/{id}/predictions -- predictions with scores
-GET  /api/eval/scores            -- aggregated eval scores
-GET  /api/eval/calibration       -- calibration curve data
-POST /api/eval/run               -- trigger eval cycle
-GET  /api/indicators             -- oil price, flow, threat levels
-GET  /api/events                 -- recent curated events
-WS   /ws                         -- real-time event stream
-```
-
----
-
-### 3. End-to-End Pipeline Wiring
-
-#### Pipeline Orchestrator: asyncio Task Group
-
-**Recommendation:** Use Python's `asyncio.TaskGroup` (Python 3.11+) to run the pipeline stages as concurrent tasks within the FastAPI lifespan.
-
-**Confidence:** HIGH
-
-**Rationale:**
-- All pipeline components are already async (DbWriter.run, SimulationEngine.run_until_tick, GDELT fetching via httpx)
-- FastAPI's `lifespan` context manager is the standard place to start/stop background tasks
-- `asyncio.TaskGroup` (available since Python 3.11, project requires 3.11+) provides structured concurrency with proper error propagation
-- No external task queue (Celery, Dramatiq) needed -- this is a single-machine, single-user tool
-
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Task lifecycle | FastAPI `lifespan` + `asyncio.TaskGroup` | Start all pipeline tasks at startup, clean shutdown |
-| GDELT polling | asyncio periodic task (15min interval) | Fetch → filter → dedup → enqueue events |
-| EIA polling | asyncio periodic task (daily) | Fetch oil prices → update indicators |
-| Event processing | SimulationEngine (existing) | Events dispatched to agents via DES |
-| Agent execution | Parallel async via `asyncio.gather` | Already designed for parallel LLM calls |
-| State broadcasting | WorldState → WebSocket broadcast | On each tick, flush deltas and push to connected clients |
-| Eval scheduling | asyncio periodic task (daily) | Score matured predictions against ground truth |
-| DB persistence | DbWriter (existing) | Single-writer queue, already async |
-
-**Pipeline flow:**
-
-```
-GDELT Poller (15min) ──┐
-EIA Poller (daily) ────┤
-                       ▼
-              Event Router
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-        Agent Runner      Cascade Engine
-              │                 │
-              └────────┬────────┘
-                       ▼
-               WorldState Update
-                       │
-              ┌────────┴────────┐
-              ▼                 ▼
-         DB Writer         WS Broadcast
-                                │
-                           Frontend
-```
-
-**What NOT to use:**
-- `Celery` / `Dramatiq` -- requires Redis/RabbitMQ broker; massive overkill for single-machine tool
-- `APScheduler` -- adds dependency for something asyncio handles natively with `asyncio.sleep` loops
-- `Prefect` / `Airflow` -- workflow orchestration platforms for data teams, not real-time simulation
-- `asyncio.create_task` without TaskGroup -- no structured concurrency, errors can be silently lost
-
-#### Periodic Task Pattern
-
-**Recommendation:** Simple async loop pattern, no scheduling library needed.
-
-```python
-async def periodic_task(fn, interval_seconds: float, name: str):
-    """Run fn every interval_seconds. For use inside TaskGroup."""
-    while True:
-        try:
-            await fn()
-        except Exception:
-            logger.exception(f"Periodic task {name} failed")
-        await asyncio.sleep(interval_seconds)
-```
-
-**Confidence:** HIGH -- this is standard Python async pattern. No library needed.
-
----
-
-### 4. Testing Additions
-
-| Component | Technology | Version | Why |
-|-----------|-----------|---------|-----|
-| WebSocket testing | `httpx` + `starlette.testclient` | (existing) | FastAPI's TestClient supports WebSocket testing natively |
-| Async test fixtures | `pytest-asyncio` | 0.25+ (existing) | Already in dev deps |
-| Time mocking | `freezegun` | 1.4+ | Mock `datetime.now()` for eval scoring tests (predictions resolve at specific times) |
-| API integration tests | `httpx.AsyncClient` | 0.28+ (existing) | Test REST endpoints with async client |
-
-**New dev dependency to add:**
-
-```toml
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.3,<9",
-    "pytest-asyncio>=0.25,<1",
-    "pytest-httpx>=0.35,<0.36",
-    "freezegun>=1.4,<2",       # NEW: time mocking for eval tests
-]
+# brief.py (simplified)
+for model_id, model_cls in get_registered_models().items():
+    predictions.append(await model_cls(...).predict(...))
 ```
 
 **What NOT to add:**
-- `factory-boy` -- useful for complex ORM models, overkill for DuckDB raw SQL
-- `hypothesis` -- property-based testing is valuable but not priority for wiring phase
-- `playwright` -- already mentioned in project memory for browser tests, add when frontend panels have real data
+- Do not add `registries` PyPI package (0.0.3, last updated 2023). It is overengineered for this use case. A 15-line registry module in stdlib Python is sufficient.
+- Do not use `importlib.import_module()` for dynamic loading. Models are known at development time. Explicit imports with decorator registration gives the same flexibility without the debugging nightmare of dynamic imports.
+- Do not use ABC/abstract base class enforcement. The models already share a common `predict()` interface by convention. Adding ABC adds boilerplate without catching real bugs.
 
----
+## Dependencies to REMOVE from pyproject.toml
 
-### 5. Frontend Additions (Minimal)
+These are dead dependencies from earlier phases that should be cleaned up:
 
-The frontend already has React, Vite, deck.gl, MapLibre, and a WebSocket hook. For wiring real data:
+| Package | Why Remove |
+|---------|------------|
+| `h3>=4.1` | Spatial visualization deleted April 8. No code imports h3. |
+| `sentence-transformers>=3.4` | Semantic dedup deleted April 8. No code imports it. |
+| `searoute>=1.3` | Sea route calculations deleted. No code imports it. |
+| `shapely>=2.0` | Geometric operations deleted. No code imports it. |
+| `google-cloud-bigquery>=3.27` | BigQuery GDELT pipeline deleted. No code imports it. |
+| `websockets>=14.0` | WebSocket support not used (CLI-first tool). No code imports it. |
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| State management | React Context + useReducer | Sufficient for single-user tool; no Redux/Zustand needed |
-| Data fetching | Native `fetch` + custom hooks | No need for React Query/SWR -- data comes via WebSocket, REST is infrequent |
-| Chart library | `recharts` 2.x | Lightweight, React-native charts for eval dashboard (calibration curves, accuracy over time) |
-| Date formatting | `date-fns` 3.x | Lightweight date utils for timeline display |
+**Impact:** These 6 packages (plus their transitive dependencies, especially `torch` from sentence-transformers) add ~2GB to the install. Removing them dramatically speeds up `pip install` and Docker builds.
 
-**New frontend dependencies:**
+## Summary: What to Add
+
+| New Dependency | Version | Purpose | Cost |
+|---------------|---------|---------|------|
+| feedparser | >=6.0.11 | RSS parsing for Reuters/AP feeds | ~50KB, zero transitive deps |
+
+**Total new dependencies: 1**
+
+Everything else uses existing stack (httpx, DuckDB, stdlib json/pathlib) or pure Python patterns (registry, file-based context).
+
+## Installation
 
 ```bash
-npm install recharts date-fns
+# Add to pyproject.toml dependencies:
+# "feedparser>=6.0.11",
+
+# Full install (after cleanup):
+pip install -e ".[dev]"
 ```
 
-**What NOT to add:**
-- `@tanstack/react-query` -- most data arrives via WebSocket push, not REST polling; React Query's cache invalidation model doesn't fit
-- `Redux` / `Zustand` -- single analyst, ~5 state slices; Context + useReducer is sufficient
-- `D3.js` directly -- deck.gl already handles the geo viz; recharts wraps D3 for standard charts
-- `ag-grid` / data table libraries -- agent list and predictions are small enough for simple HTML tables
+## Environment Variables
 
-**Confidence:** MEDIUM -- frontend package versions not verified against current releases.
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `X_BEARER_TOKEN` | For Twitter/X monitoring | X API v2 bearer token (pay-per-use account) |
+| `EIA_API_KEY` | Already exists | Same key works for weekly petroleum data |
+| All existing vars | Already configured | No changes needed |
 
----
+**Cost impact of X API:** ~$2/day for monitoring 10 journalist accounts 2x/day. Well within $20/day budget (LLM calls use ~$0.02/run).
 
-## Full Dependency Summary
+## New File Structure
 
-### Backend: New Dependencies
-
-| Package | Version | Purpose | New? |
-|---------|---------|---------|------|
-| `freezegun` | >=1.4 | Time mocking in eval tests | YES (dev only) |
-| `numpy` | (transitive) | Calibration math | NO (via sentence-transformers) |
-
-**That is it.** The existing stack covers everything needed. The eval framework, API layer, and pipeline wiring are all achievable with what is already installed.
-
-### Frontend: New Dependencies
-
-| Package | Version | Purpose | New? |
-|---------|---------|---------|------|
-| `recharts` | ^2.12 | Charts for eval dashboard | YES |
-| `date-fns` | ^3.6 | Date formatting for timelines | YES |
-
-### Infrastructure: No Changes
-
-Docker Compose, nginx proxy, DuckDB volume -- all unchanged.
-
----
+```
+backend/
+  data/
+    context/
+      crisis_timeline.md          # Moved from Python string
+      pre_crisis_aug25_feb26.md   # New: fills Claude's knowledge gap
+      rolling/
+        2026-04-12_08.json        # Per-run rolling context
+        2026-04-12_20.json
+  src/parallax/
+    ingestion/
+      rss_feeds.py                # NEW: Reuters/AP RSS via feedparser
+      x_journalists.py            # NEW: X API v2 journalist monitoring
+      oil_prices.py               # EXTENDED: weekly inventory function
+    prediction/
+      registry.py                 # NEW: model registry pattern
+      crisis_context.py           # MODIFIED: loads from files
+      iran_political.py           # NEW: political transition model
+    markets/
+      kalshi.py                   # EXTENDED: contract discovery methods
+```
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Eval scoring | Custom Python | scikit-learn metrics | Pulls heavy ML deps for simple math |
-| Eval tracking | DuckDB tables | MLflow / W&B | Adds infrastructure for 50-agent tool |
-| WebSocket | FastAPI native | Socket.IO | Unnecessary abstraction for single-client |
-| Task scheduling | asyncio loops | APScheduler / Celery | External deps for something asyncio does natively |
-| Pipeline orchestration | asyncio.TaskGroup | Prefect / Airflow | Cloud orchestrators for a local Docker tool |
-| State management | React Context | Redux / Zustand | Over-engineered for single-analyst UI |
-| Charts | recharts | D3.js / Chart.js / Plotly | recharts is React-native, simpler API, sufficient for eval dashboards |
-| Data fetching | Native fetch + WS | React Query / SWR | Data is push-based via WebSocket, not pull-based |
-| Prompt eval | Custom scoring | promptfoo / ragas | Those eval prompt quality, not prediction accuracy |
-
----
-
-## Installation Changes
-
-### Backend
-
-```bash
-# No new production dependencies
-# Dev only:
-pip install -e ".[dev]"  # freezegun added to dev deps
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install recharts date-fns
-```
-
----
-
-## Architecture Implications for Stack
-
-The stack choices reinforce a **monolithic async** architecture:
-
-1. **Single Python process** runs FastAPI (REST + WS), simulation engine, pipeline tasks, and eval -- all via asyncio
-2. **No message broker** -- events flow through in-memory asyncio queues and the DES engine
-3. **No external scheduler** -- periodic tasks are asyncio loops within the FastAPI lifespan
-4. **No separate eval service** -- scoring runs as a periodic task in the same process
-5. **DuckDB single-writer** constraint is satisfied by the existing DbWriter queue pattern
-
-This is correct for v1: single analyst, local Docker, $20/day budget. Scaling to multi-user would require splitting into services, but that is explicitly out of scope.
-
----
-
-## Confidence Assessment
-
-| Area | Confidence | Rationale |
-|------|------------|-----------|
-| Eval scoring approach | HIGH | Schema already designed for it; Brier score is trivial math |
-| FastAPI WebSocket | HIGH | Native Starlette support, well-documented, already partially wired |
-| asyncio.TaskGroup pipeline | HIGH | Standard Python 3.11+ pattern, all components already async |
-| No new backend deps needed | HIGH | Verified against existing pyproject.toml and component requirements |
-| recharts for frontend charts | MEDIUM | Not verified against latest release; may need version check |
-| Prompt improvement via LLM | MEDIUM | The storage/scoring is standard; the "LLM rewrites its own prompts" loop is experimental |
-| Frontend state management | MEDIUM | Context + useReducer is sufficient assumption based on single-user; may need reassessment if UI complexity grows |
-
----
+| RSS parsing | feedparser | raw xml.etree | ET breaks on malformed XML from third-party feeds |
+| X API client | httpx (existing) | tweepy 4.x | Unnecessary dependency; httpx already in stack |
+| X API client | httpx (existing) | xdk (official) | Too new (early 2026), thin docs, auto-generated code |
+| Oil data | EIA API v2 (existing) | Platts API | Enterprise pricing ($10K+/yr), inaccessible |
+| Oil data | EIA API v2 (existing) | OilPriceAPI.com | Free tier (1K req/mo) sufficient but EIA already covers the need |
+| Context storage | Markdown files | Jinja2 templates | Prompt injection risk, unnecessary complexity |
+| Context storage | JSON files on disk | DuckDB table | Files are easier to debug during validation window |
+| Model registry | stdlib dict + decorator | `registries` PyPI | Abandoned package (2023), 15 lines of stdlib code suffices |
+| Model registry | explicit imports | importlib dynamic | Dynamic imports are a debugging nightmare for 4-5 models |
 
 ## Sources
 
-- Codebase analysis: `backend/pyproject.toml`, `backend/src/parallax/db/schema.py`, `backend/src/parallax/simulation/engine.py`
-- Project context: `.planning/PROJECT.md`, `.planning/codebase/STACK.md`
-- FastAPI WebSocket documentation (training data, may be 6-18 months stale -- flag for verification)
-- asyncio.TaskGroup introduced in Python 3.11 PEP 654 (training data, verified by project's `requires-python >= 3.11`)
-- Brier score definition: standard statistical scoring rule (not library-dependent)
-
-**Note:** WebSearch and Context7 were unavailable during this research session. Version numbers for new frontend deps (recharts, date-fns) should be verified against npm before installation. All backend recommendations use existing dependencies and are HIGH confidence.
+- [feedparser on PyPI](https://pypi.org/project/feedparser/) -- v6.0.12 (Sep 2025), production-stable
+- [Kalshi Get Event API](https://docs.kalshi.com/api-reference/events/get-event) -- with_nested_markets param verified
+- [Kalshi Get Markets API](https://docs.kalshi.com/api-reference/market/get-markets) -- pagination and filtering verified
+- [Kalshi Get Events API](https://docs.kalshi.com/api-reference/events/get-events) -- series_ticker filter verified
+- [X API Pay-Per-Use Pricing](https://devcommunity.x.com/t/announcing-the-launch-of-x-api-pay-per-use-pricing/256476) -- $0.005/read, no free tier
+- [X Python XDK](https://docs.x.com/xdks/python/overview) -- official SDK, launched early 2026
+- [EIA Open Data Portal](https://www.eia.gov/opendata/) -- API v2 documentation
+- [EIA Weekly Petroleum Status Report](https://www.eia.gov/petroleum/supply/weekly/) -- Wednesday release schedule confirmed
+- [Reuters RSS feeds status](https://www.fivefilters.org/2021/reuters-rss-feeds/) -- officially discontinued June 2020
+- [AP News RSS feeds](https://rss.feedspot.com/associated_press_rss_feeds/) -- 40+ active feeds confirmed

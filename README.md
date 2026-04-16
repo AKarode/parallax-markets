@@ -1,262 +1,149 @@
 # Parallax
 
-**Prediction-market edge finder for the Iran-Hormuz crisis.**
+Prediction market edge detection for geopolitical events.
 
-Parallax ingests news, runs AI prediction models, normalizes live Kalshi and Polymarket quotes, computes edge against executable entry prices, and records a paper-trading journal with order attempts, fills, and positions.
+Finds mispriced contracts on [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com) by modeling second-order effects that headline-scraping bots miss. Ingests real-time news and economic data, runs ensemble AI predictions, compares model probabilities against live market prices, and surfaces divergences as trade signals. Currently targeting geopolitical energy markets, paper-trading to validate edge before putting real money on it.
 
-## What Changed
-
-The repo now treats pricing and trading honestly:
-
-- executable quotes are explicit: `best_yes_bid`, `best_yes_ask`, `best_no_bid`, `best_no_ask`
-- derived prices are labeled and never used as execution inputs
-- signals can be `tradable`, `degraded`, or `non_tradable`
-- paper trading records `signal -> order attempt -> accepted/rejected/cancelled -> fill -> open position -> closed position`
-- trading report cards use only actually filled and later closed paper positions
-- signal-quality analysis remains available separately through counterfactual evaluation
-- dry-run data is isolated from demo/live data by default
+Instead of just reading headlines, the system simulates physical supply chain effects (blockade disrupts flow, flow reroutes through bypass, price shocks hit downstream, insurance costs spiral) and uses that to inform predictions.
 
 ## How It Works
 
-```text
-News Sources                    Market Data
-  Google News RSS                 Kalshi API
-  GDELT DOC API                   Polymarket CLOB/Gamma
-  EIA Oil Prices                         |
-         |                                |
-         v                                v
-  3 Prediction Models            Normalized Market Snapshots
-  (Claude + cascade)             executable + derived fields
-         |                                |
-         +----------> Mapping Policy <----+
-                        executable edge
-                              |
-                         Signal Ledger
-                explicit entry side/price semantics
-                              |
-                   +----------+-----------+
-                   |                      |
-            Signal-Quality Eval      Trade Journal
-            counterfactual only      orders / fills / positions
-                                             |
-                                      Trading Report Card
-                                     traded positions only
+```
+       DATA SOURCES                      MODELS                         SIGNALS
+ ┌──────────────────┐          ┌───────────────────────┐         ┌──────────────────┐
+ │ Google News RSS  │          │ 3 Prediction Models   │         │ Divergence       │
+ │ GDELT DOC API    │────────▶ │ (Claude Opus x3 each) │────────▶│ Detector         │
+ │ EIA Oil Prices   │          │                       │         │                  │
+ │ Truth Social     │          │ + Cascade Engine       │         │ BUY / SELL /     │
+ └──────────────────┘          │   (6-rule physical    │         │ HOLD signals     │
+                               │    supply chain sim)  │         │                  │
+ ┌──────────────────┐          └───────────────────────┘         └────────┬─────────┘
+ │ Kalshi API       │                                                     │
+ │ Polymarket API   │──── live market prices ────────────────────────────▶ │
+ └──────────────────┘                                            ┌────────▼─────────┐
+                                                                 │ Paper Trading     │
+                                                                 │ (Kalshi sandbox)  │
+                                                                 └──────────────────┘
 ```
 
+## What Makes It Interesting
+
+**Ensemble predictions** - Each model makes 3 independent API calls at different temperatures and aggregates with trimmed mean. If the calls disagree too much (>10pp std dev), the prediction gets flagged as low-confidence and edge is downgraded. Reduces single-call noise without just averaging away signal.
+
+**Cascade reasoning** - Predictions aren't just LLM vibes on headlines. A 6-rule engine simulates physical supply chain effects (blockade, flow disruption, bypass rerouting, price shock, downstream impact, insurance spiral) and feeds that into the oil price model.
+
+**Proxy-aware contract mapping** - Not every prediction maps cleanly to a tradeable contract. Each contract gets an explicit proxy classification (direct, near-proxy, loose-proxy) with edge discounting so the system doesn't treat a loose thematic connection the same as a direct match.
+
+**Crisis context injection** - Claude's training data cuts off before the crisis started. A manually maintained timeline gets injected into every prompt so the models actually know what's happened.
+
+**Paper trading with real execution semantics** - Signals use actual bid/ask quotes, not mid-prices. Slippage and fees are modeled before any trade decision. The system tracks the full lifecycle: signal, order attempt, fill, position, settlement.
+
+## Architecture
+
+```
+backend/src/parallax/
+  cli/brief.py                Pipeline orchestration and daily brief
+  prediction/
+    ensemble.py               Multi-call LLM aggregation (trimmed mean, instability detection)
+    oil_price.py              Oil price direction model (cascade + LLM)
+    ceasefire.py              Ceasefire probability model
+    hormuz.py                 Strait reopening model
+    crisis_context.py         Historical timeline injection
+  simulation/
+    cascade.py                6-rule physical cascade engine
+    world_state.py            Geospatial state (H3 hexagonal grid)
+  contracts/
+    registry.py               Contract registry and proxy classification
+    mapping_policy.py         Proxy-aware signal mapping with cost model
+  scoring/
+    ledger.py                 Append-only signal records with full provenance
+    tracker.py                Paper trade execution and order lifecycle
+    calibration.py            Hit rate, calibration curves, edge decay
+    scorecard.py              Daily scorecard ETL (15+ metrics across 5 categories)
+    resolution.py             Settlement polling and outcome backfill
+  markets/
+    kalshi.py                 Kalshi API client (RSA-PSS auth)
+    polymarket.py             Polymarket read-only client
+  portfolio/
+    allocator.py              Position sizing
+  ingestion/
+    google_news.py            Google News RSS poller
+    gdelt_doc.py              GDELT DOC 2.0 API
+    oil_prices.py             EIA API v2 (Brent/WTI)
+  budget/
+    tracker.py                LLM budget enforcement
+  dashboard/
+    data.py                   Query layer for React dashboard
+  db/
+    schema.py                 DuckDB schema (20+ tables)
+
+frontend/                     React + Vite + TypeScript dashboard
+```
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python 3.12, FastAPI, DuckDB |
+| AI | Claude Opus 4 (3x ensemble calls per prediction) |
+| Frontend | React 18, TypeScript, Vite, deck.gl, MapLibre GL |
+| Data | Google News RSS, GDELT, EIA API v2, Kalshi API, Polymarket API |
+| Geo | H3 hexagonal indexing, Shapely, Searoute |
+| Testing | pytest (265+ tests), pytest-asyncio, pytest-httpx |
+
+## Roadmap
+
+### In Progress
+
+> Fix structural flaws in how models reason, expand contract coverage, validate the hold-to-settlement thesis against actual outcomes.
+
+- [x] Prompt fixes (remove market price anchoring, fix cascade data bugs, sample size guards)
+- [x] Ensemble predictions (3 calls per model, trimmed mean, instability detection)
+- [ ] Risk gate filter (5-gate sequential: Kelly, liquidity, correlation, concentration, drawdown)
+- [ ] Context foundation (file-based crisis context, model registry)
+- [ ] Contract discovery (enumerate full contract landscape, classify into families)
+- [ ] New capabilities (political transition model, rolling context, news diversification)
+- [ ] Resolution validation (settlement-scored backtest, before/after comparison)
+
+### Planned
+
+> Transform from "LLM with scaffolding" into a principled hybrid pricing engine.
+
+- [ ] Bayesian evidence aggregation (log-likelihood ratios, source grading, correlation-adjusted clustering)
+- [ ] Multi-provider ensemble (Claude + GPT + Gemini with consensus threshold)
+- [ ] Cascade engine upgrade (OPEC spare capacity, SPR levels, seasonal demand, insurance feedback loops)
+
+### Future
+
+- Live trading (pending proven edge on paper)
+- Additional domains beyond current thesis
+- Real-time dashboard with WebSocket updates
+
 ## Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- Anthropic API key
-- Kalshi API credentials for live/demo reads and paper execution
-
-### Setup
 
 ```bash
 cd backend
 pip install -e ".[dev]"
 
-cat > .env << 'EOF'
-ANTHROPIC_API_KEY=your-key
-KALSHI_API_KEY=your-kalshi-key-id
-KALSHI_PRIVATE_KEY_PATH=~/.kalshi/private_key.pem
-EIA_API_KEY=your-eia-key
-PARALLAX_ENV=demo
-DUCKDB_PATH=data/parallax-demo.duckdb
-EOF
+# Set environment variables
+export ANTHROPIC_API_KEY=your-key
+export KALSHI_API_KEY=your-kalshi-key-id
+export KALSHI_PRIVATE_KEY_PATH=~/.kalshi/private_key.pem
 
-set -a && source .env && set +a
-```
-
-### Run
-
-```bash
-# Isolated dry run: mock predictions + isolated in-memory DB
+# Dry run (mock data, no API calls)
 python -m parallax.cli.brief --dry-run
 
-# Live predictions + real market prices, no paper execution
+# Live predictions + real market prices, no trades
 python -m parallax.cli.brief --no-trade
 
-# Full demo paper-trading pipeline
+# Full pipeline with paper trade execution
 python -m parallax.cli.brief
-
-# Signal-quality report (counterfactual, not traded P&L)
-python -m parallax.cli.brief --calibration
-
-# Trading report card (real paper positions only)
-python -m parallax.cli.brief --report-card
-
-# Settlement backfill
-python -m parallax.cli.brief --check-resolutions
-```
-
-## Data Environments
-
-Parallax now keeps environments explicit:
-
-- `--dry-run` uses `dry_run` data environment and isolated in-memory storage by default
-- `PARALLAX_ENV=demo` uses demo paper-trading storage, for example `data/parallax-demo.duckdb`
-- `PARALLAX_ENV=live` is for live-market data / future live execution, for example `data/parallax-live.duckdb`
-
-Persisted records include `data_environment` and execution environment fields so demo and live learning data do not silently mix.
-
-## API Server
-
-```bash
-uvicorn parallax.main:app --reload
-```
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Runtime status plus data/execution environment |
-| `/api/predictions` | GET | Latest predictions |
-| `/api/markets` | GET | Latest normalized market snapshots |
-| `/api/divergences` | GET | Current in-memory divergences |
-| `/api/trades` | GET | Order journal and tracked positions |
-| `/api/brief/run` | POST | Trigger a dry-run brief |
-
-## Storage Model
-
-Key tables:
-
-- `market_prices`: normalized executable quotes plus labeled derived fields
-- `signal_ledger`: mapping evaluation, tradability, entry semantics, execution linkages
-- `trade_orders`: every order attempt and outcome
-- `trade_fills`: actual fills
-- `trade_positions`: open/closed paper positions
-
-Key views:
-
-- `signal_quality_evaluation`: resolved signal-quality / counterfactual analysis
-- `trade_evaluation`: resolved traded-position analysis
-
-## Architecture
-
-```text
-backend/src/parallax/
-  cli/brief.py              brief orchestration, market persistence, paper execution
-  main.py                   FastAPI API
-  contracts/
-    mapping_policy.py       executable edge selection + proxy discounting
-    registry.py             contract registry
-    schemas.py              mapping result with entry semantics
-  dashboard/
-    app.py                  Streamlit dashboard
-    data.py                 dashboard/API query helpers
-  db/
-    runtime.py              environment + DB path resolution
-    schema.py               DuckDB schema + additive migrations
-    writer.py               async writer helper
-  divergence/
-    detector.py             executable-entry divergence detector
-  markets/
-    kalshi.py               Kalshi normalization, orderbook handling, sandbox orders
-    polymarket.py           Polymarket executable/derived quote normalization
-    schemas.py              market snapshot + orderbook schemas
-  prediction/
-    ceasefire.py
-    hormuz.py
-    oil_price.py
-    schemas.py
-  scoring/
-    calibration.py          signal-quality analysis
-    ledger.py               signal ledger with entry semantics
-    prediction_log.py       persisted predictions with environment labels
-    report_card.py          traded-only report card
-    recalibration.py        bucket-based probability recalibration
-    resolution.py           settlement backfill for signals and positions
-    scorecard.py            daily scorecard ETL (15+ metrics, 5 categories)
-    tracker.py              order/fill/position journal
-    track_record.py         prompt track record
-  ops/
-    alerts.py               alert dispatcher + DuckDB persistence sink
-    runtime.py              runtime config and kill switch
-  budget/
-    tracker.py              $20/day LLM budget + per-call cost persistence
-  scripts/
-    cron_pipeline.sh        automated pipeline runner (cron/launchd)
 ```
 
 ## Testing
 
 ```bash
-cd backend
-python -m pytest tests/ -x -v
+cd backend && python -m pytest tests/ -x -v
 ```
 
-The executable-pricing and journal refactor is covered by focused tests for:
-
-- Kalshi normalization
-- Polymarket normalization
-- divergence detection
-- mapping policy
-- signal ledger
-- resolution backfill
-- trade/report evaluation split
-- brief formatting and dry-run isolation
-
-## Daily Scorecard
-
-Compute 15+ metrics across Signal Quality, Execution, Portfolio/Risk, Data Quality, and Ops:
-
-```bash
-# Today's scorecard
-python -m parallax.cli.brief --scorecard
-
-# Specific date
-python -m parallax.cli.brief --scorecard --date 2026-04-09
-```
-
-Metrics are persisted to the `daily_scorecard` DuckDB table and can be trended over time.
-
-## Automated Pipeline (Cron)
-
-Run the full pipeline on a schedule: predictions → resolution check → scorecard.
-
-### Deploy on WSL / Linux
-
-```bash
-# Clone and install
-git clone git@github.com:AKarode/parallax-markets.git
-cd parallax-markets/backend
-pip install -e ".[dev]"
-
-# Set up environment
-cp .env.example .env
-# Edit .env with your API keys:
-#   ANTHROPIC_API_KEY, KALSHI_API_KEY, KALSHI_PRIVATE_KEY_PATH
-
-# Test the pipeline
-source .env && python -m parallax.cli.brief --no-trade
-
-# Install cron (8am + 8pm UTC)
-(crontab -l 2>/dev/null; echo "0 8,20 * * * $(pwd)/scripts/cron_pipeline.sh") | crontab -
-
-# Verify
-crontab -l
-```
-
-The cron script auto-detects paths from its own location — no editing needed. Logs go to `~/parallax-logs/`.
-
-### Deploy on macOS
-
-Same setup, just use `launchd` or `crontab -e` to add:
-
-```
-0 8,20 * * * /path/to/parallax-markets/backend/scripts/cron_pipeline.sh
-```
-
-### What the cron does
-
-Each run:
-1. `parallax brief --no-trade --scheduled` — predictions + market reads + signal evaluation
-2. `parallax brief --check-resolutions` — backfill settled contracts
-3. `parallax brief --scorecard` — compute daily metrics
-
-## Current Limitations
-
-- accepted-but-resting orders are recorded, but there is not yet a background reconciler for later partial fills
-- slippage and fee modeling are still thin outside venue response fields
-- there are no hard portfolio/risk controls yet
-- live trading remains out of scope; this is still a paper-trading system
+265+ tests covering ensemble aggregation, cascade modeling, contract mapping, signal evaluation, resolution backfill, and paper trade lifecycle.

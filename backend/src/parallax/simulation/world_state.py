@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass
 
 
@@ -21,6 +22,10 @@ class WorldState:
     @property
     def tick(self) -> int:
         return self._tick
+
+    def copy(self) -> "WorldState":
+        """Deep copy for safe mutation in cascade operations."""
+        return copy.deepcopy(self)
 
     def get_cell(self, cell_id: int) -> dict | None:
         cell = self._cells.get(cell_id)

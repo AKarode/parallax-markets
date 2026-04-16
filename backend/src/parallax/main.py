@@ -137,9 +137,21 @@ app = FastAPI(title="Parallax", version="1.0.0", lifespan=lifespan)
 @app.get("/api/health")
 async def health():
     """Return pipeline status: last fetch times, budget stats, trade count."""
+    # Pull last run time from DB (covers CLI cron runs, not just API calls)
+    last_brief = app.state.last_brief_time
+    if last_brief is None:
+        try:
+            row = app.state.db.execute(
+                "SELECT MAX(started_at) FROM runs",
+            ).fetchone()
+            if row and row[0] is not None:
+                last_brief = row[0].isoformat() if hasattr(row[0], 'isoformat') else str(row[0])
+        except Exception:
+            pass
+
     return {
         "status": "healthy",
-        "last_brief_time": app.state.last_brief_time,
+        "last_brief_time": last_brief,
         "predictions_count": len(app.state.last_predictions),
         "markets_count": len(app.state.last_markets),
         "divergences_count": len(app.state.last_divergences),
@@ -250,3 +262,105 @@ async def run_brief_endpoint():
             "status": "error",
             "error": str(e),
         }
+
+
+# ---------------------------------------------------------------------------
+# Dashboard endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/latest-signals")
+async def get_latest_signals():
+    """Return latest run signals with market prices (DB-backed, always available)."""
+    from parallax.dashboard.data import get_latest_signals_with_markets
+
+    try:
+        return {"signals": get_latest_signals_with_markets(app.state.db)}
+    except Exception:
+        logger.exception("Latest signals query failed")
+        return {"signals": []}
+
+
+@app.get("/api/scorecard")
+async def get_scorecard(date: str | None = None):
+    """Return daily scorecard metrics."""
+    from parallax.dashboard.data import get_scorecard_metrics
+
+    try:
+        return get_scorecard_metrics(app.state.db, date)
+    except Exception:
+        logger.exception("Scorecard query failed")
+        return {"error": "scorecard query failed"}
+
+
+@app.get("/api/contracts")
+async def get_contracts():
+    """Return active contracts with proxy mappings."""
+    from parallax.dashboard.data import get_active_contracts
+
+    try:
+        return {"contracts": get_active_contracts(app.state.db)}
+    except Exception:
+        logger.exception("Contracts query failed")
+        return {"contracts": []}
+
+
+@app.get("/api/signals")
+async def get_signals(contract: str, limit: int = 20):
+    """Return signal history for a specific contract."""
+    from parallax.dashboard.data import get_signals_for_contract
+
+    try:
+        return {"signals": get_signals_for_contract(app.state.db, contract, limit)}
+    except Exception:
+        logger.exception("Signals query failed")
+        return {"signals": []}
+
+
+@app.get("/api/edge-decay")
+async def get_edge_decay(contract: str):
+    """Return edge decay analysis for a specific contract."""
+    from parallax.dashboard.data import get_edge_decay_for_contract
+
+    try:
+        return get_edge_decay_for_contract(app.state.db, contract)
+    except Exception:
+        logger.exception("Edge decay query failed")
+        return {"verdict": "query failed", "n_pairs": 0}
+
+
+@app.get("/api/price-history")
+async def get_price_history_endpoint(ticker: str, limit: int = 100):
+    """Return market price history for a ticker."""
+    from parallax.dashboard.data import get_price_history
+
+    try:
+        return {"prices": get_price_history(app.state.db, ticker, limit)}
+    except Exception:
+        logger.exception("Price history query failed")
+        return {"prices": []}
+
+
+@app.get("/api/prediction-history")
+async def get_prediction_history():
+    """Return prediction history grouped by model."""
+    from parallax.dashboard.data import get_prediction_history as _get_pred_hist
+
+    try:
+        return {"models": _get_pred_hist(app.state.db)}
+    except Exception:
+        logger.exception("Prediction history query failed")
+        return {"models": {}}
+
+
+@app.get("/api/portfolio")
+async def get_portfolio():
+    """Return portfolio simulation results."""
+    from parallax.portfolio.simulator import PortfolioSimulator
+
+    try:
+        sim = PortfolioSimulator(app.state.db)
+        return sim.run()
+    except Exception:
+        logger.exception("Portfolio simulation failed")
+        return {"portfolio_value": 1000.0, "error": "simulation failed"}

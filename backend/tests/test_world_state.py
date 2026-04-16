@@ -62,3 +62,27 @@ def test_load_from_snapshot():
     assert ws.tick == 50
     assert ws.get_cell(100)["influence"] == "iran"
     assert ws.get_cell(200)["flow"] == 2000.0
+
+
+def test_copy_returns_independent_state():
+    ws = WorldState()
+    ws.update_cell(100, flow=5000, status="blocked")
+
+    ws_copy = ws.copy()
+    ws_copy.update_cell(100, flow=0, status="open")
+
+    # Original unchanged
+    assert ws.get_cell(100)["flow"] == 5000
+    assert ws.get_cell(100)["status"] == "blocked"
+    # Copy was mutated
+    assert ws_copy.get_cell(100)["flow"] == 0
+    assert ws_copy.get_cell(100)["status"] == "open"
+
+
+def test_copy_preserves_tick():
+    ws = WorldState()
+    ws.advance_tick()
+    ws.advance_tick()
+
+    ws_copy = ws.copy()
+    assert ws_copy.tick == 2

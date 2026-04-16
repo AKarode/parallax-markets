@@ -1,12 +1,11 @@
 """Hormuz Strait reopening prediction model.
 
 Checks current world state for Hormuz cell status, runs cascade scenarios
-for partial and full reopening, and feeds analysis to Claude Sonnet.
+for partial and full reopening, and feeds analysis to Claude Sonnet ensemble.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,18 +13,19 @@ from typing import Any
 import duckdb
 
 from parallax.budget.tracker import BudgetTracker
+from parallax.prediction.ensemble import ensemble_predict
 from parallax.prediction.schemas import PredictionOutput
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.world_state import WorldState
 
 logger = logging.getLogger(__name__)
 
-HORMUZ_SYSTEM_PROMPT = """You are a maritime security analyst. Given the current Hormuz strait status and recent events, estimate reopening probabilities.
+HORMUZ_SYSTEM_PROMPT = """You are a maritime security analyst. Given the current Hormuz strait status and recent events, estimate the probability of partial reopening.
 
 Current status:
 {flow_data}
 
-Scenario analysis:
+Scenario analysis (for context -- shows sensitivity to different reopening levels):
 - 25% reopening: supply recovery = {recovery_25:.0f} bbl/day
 - 50% reopening: supply recovery = {recovery_50:.0f} bbl/day
 - 100% reopening: supply recovery = {recovery_100:.0f} bbl/day
@@ -33,17 +33,10 @@ Scenario analysis:
 Recent events:
 {events_summary}
 
-Current market prices:
-{market_prices_text}
-
 ## YOUR TRACK RECORD
 {track_record}
 
-Consider what the market may already be pricing in and where it might be wrong.
-
-Estimate:
-(a) Probability of partial reopening (>25% flow restored) within 14 days
-(b) Probability of full reopening within 30 days
+Estimate ONE probability: the likelihood of partial reopening (>25% of pre-war commercial shipping flow restored through the Strait of Hormuz) within 14 days.
 
 Output ONLY valid JSON (no markdown):
 {{
@@ -51,7 +44,7 @@ Output ONLY valid JSON (no markdown):
   "confidence": <float 0-1, how confident you are in this estimate>,
   "direction": "<increase|decrease|stable>",
   "magnitude_range": [<low_pct_reopening>, <high_pct_reopening>],
-  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what the market may be missing, second-order effects, and key uncertainties>",
+  "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what factors drive reopening likelihood, second-order effects, and key uncertainties>",
   "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>", "...(3-5 total)"]
 }}"""
 
@@ -73,7 +66,6 @@ class HormuzReopeningPredictor:
         self,
         recent_events: list[dict],
         world_state: WorldState,
-        market_prices: list[dict] | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
     ) -> PredictionOutput:
         """Run Hormuz reopening prediction pipeline.
@@ -99,55 +91,48 @@ class HormuzReopeningPredictor:
         recovery_100 = self._estimate_recovery(world_state, 1.00)
 
         # Step 3: LLM call
+        from parallax.prediction.crisis_context import get_crisis_context
+
         events_summary = self._format_events(recent_events[:10])
-        prompt = HORMUZ_SYSTEM_PROMPT.format(
+        prompt = get_crisis_context() + "\n\n" + HORMUZ_SYSTEM_PROMPT.format(
             flow_data=flow_data,
             recovery_25=recovery_25,
             recovery_50=recovery_50,
             recovery_100=recovery_100,
             events_summary=events_summary,
-            market_prices_text=self._format_market_prices(market_prices),
             track_record=track_record,
         )
 
-        response = await self._client.messages.create(
+        result = await ensemble_predict(
+            client=self._client,
             model="claude-opus-4-20250514",
+            prompt=prompt,
+            budget=self._budget,
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
         )
+        ensemble = result["ensemble"]
+        parsed = result["parsed"]
 
-        usage = response.usage
-        self._budget.record(usage.input_tokens, usage.output_tokens, "opus")
-
-        # Step 4: Parse
-        raw_text = response.content[0].text
-        text = raw_text.strip()
-        if text.startswith("```json") or text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(lines[1:]).strip()
-        if text.endswith("```"):
-            text = text[:-3].rstrip()
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            logger.error("Failed to parse hormuz_reopening raw response: %s", raw_text)
-            raise ValueError(
-                f"Failed to parse hormuz_reopening LLM response: {text[:200]}",
-            ) from exc
+        confidence = parsed.get("confidence", 0.5)
+        if ensemble["is_unstable"]:
+            confidence *= 0.5
 
         return PredictionOutput(
             model_id="hormuz_reopening",
             prediction_type="hormuz_reopening",
-            probability=parsed["probability"],
+            probability=ensemble["probability"],
             direction=parsed.get("direction", "stable"),
             magnitude_range=parsed.get("magnitude_range", [0.0, 100.0]),
             unit="pct_reopening",
             timeframe="14d",
-            confidence=parsed.get("confidence", 0.5),
-            reasoning=parsed["reasoning"],
+            confidence=confidence,
+            reasoning=f"{parsed['reasoning']}\n\n[Ensemble: probabilities={ensemble['individual_probabilities']}, method=trimmed_mean, std_dev={ensemble['std_dev']:.3f}]",
             evidence=parsed.get("evidence", []),
             created_at=datetime.now(timezone.utc),
             kalshi_ticker=None,  # mapped dynamically by brief pipeline
+            ensemble_probabilities=ensemble["individual_probabilities"],
+            ensemble_std_dev=ensemble["std_dev"],
+            ensemble_is_unstable=ensemble["is_unstable"],
         )
 
     @staticmethod
@@ -205,13 +190,3 @@ class HormuzReopeningPredictor:
                 lines.append(f"- {actor1} -> {actor2}: code={code}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _format_market_prices(market_prices: list[dict] | None) -> str:
-        if not market_prices:
-            return "No market prices available."
-        lines = []
-        for mp in market_prices:
-            price = mp.get("derived_yes_price") or mp.get("yes_price")
-            price_str = f"{price:.0%}" if price is not None else "N/A"
-            lines.append(f"- {mp['ticker']} ({mp['source']}): YES {price_str}")
-        return "\n".join(lines)

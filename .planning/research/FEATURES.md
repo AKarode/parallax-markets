@@ -1,202 +1,380 @@
-# Feature Landscape
+# Feature Landscape: Model Intelligence + Resolution Validation
 
-**Domain:** Geopolitical crisis simulation and live intelligence platform (single-analyst tool)
-**Researched:** 2026-03-30
-**Focus:** Features needed to go from working subsystems to end-to-end live intelligence tool
-
-## Context
-
-Parallax already has: simulation engine, cascade rules, GDELT ingestion, agent swarm (50 agents), budget tracker, frontend shell with H3 map, and DuckDB persistence. These exist on parallel feature branches, not yet integrated. The question is: what features turn these subsystems into a working intelligence tool that produces evaluated predictions against the live Iran-Hormuz crisis?
-
-Reference platforms considered: Good Judgment Project, Metaculus, IARPA ACE/SAGE programs, Recorded Future, Stratfor, Palantir Gotham, Polymarket (for scoring mechanics), Premise Data.
+**Domain:** Prediction market edge-finding system (LLM-based, Iran-Hormuz crisis focus)
+**Researched:** 2026-04-12
+**Milestone:** v1.4 Model Intelligence + Resolution Validation
 
 ---
 
 ## Table Stakes
 
-Features the analyst expects. Missing any of these means the tool does not function as an intelligence product.
+Features that the system MUST have for model outputs to be trustworthy and tradeable. Missing any of these means the edge-finding pipeline is structurally broken -- not just suboptimal, but producing signals you cannot trust.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **End-to-end data pipeline** | GDELT events must flow through agents to cascade to world state to frontend without manual steps | High | This is integration work -- all subsystems exist but are not wired together. The main orchestration loop (ingest -> route -> agent decide -> cascade -> persist -> push) does not exist yet. |
-| **FastAPI REST endpoints** | Frontend needs to fetch current world state, agent decisions, predictions, indicators on page load | Medium | Schema and queries exist. Need CRUD endpoints for world state, decisions, predictions, events, agent status. Standard REST wrapping of existing `queries.py`. |
-| **WebSocket live push** | The tool is "live" -- analyst expects real-time updates without refreshing. Agent decisions, new events, indicator changes must push to frontend. | Medium | Frontend has WebSocket hook already. Backend needs to emit events when state changes. Pattern: simulation engine emits to a broadcast channel, WebSocket handler fans out. |
-| **Prediction logging with structured schema** | Predictions must be structured (direction, magnitude, timeframe, confidence) not free-text, or they cannot be scored | Medium | Schema exists in `predictions` table. Need: agent output parsing into this schema, validation, dedup of near-identical predictions. Pydantic output schemas for agents already exist on agent branch. |
-| **Ground truth fetching** | Predictions are worthless without resolution. Need automated fetching of actual outcomes (oil prices from EIA, event occurrence from GDELT, shipping data) | Medium | EIA fetcher exists. Need: a resolver that matches prediction types to ground truth sources, runs on schedule, populates `ground_truth` column in predictions table. |
-| **Prediction scoring (Brier score)** | Core value prop is "predictions that beat human intuition, continuously evaluated." Without scoring, there is no evaluation. | Medium | Use Brier score for probabilistic predictions (standard in forecasting: GJP, Metaculus, IARPA all use it). Direction accuracy is binary. Magnitude accuracy needs a continuous error metric. Schema has `score_direction`, `score_magnitude`, `miss_tag` columns ready. |
-| **Daily eval cron** | Scoring must happen automatically. Analyst should not have to trigger evaluation manually. | Low | Scheduled task (asyncio periodic or APScheduler) that: finds predictions past `resolve_by`, fetches ground truth, scores, writes to `eval_results`. |
-| **Frontend wired to real data** | Dashboard panels currently show placeholders. Agent activity, live indicators, and map must show actual simulation state. | High | Multiple panels need data binding: agent activity feed, oil price indicator, threat level indicator, H3 map colors from world state. Each panel is a separate integration task. |
-| **Agent prompt versioning** | When prompts are refined based on eval, need to track which version produced which predictions. Already in schema (`prompt_version` on decisions and predictions). | Low | Schema supports this. Need: version incrementing logic, storage of prompt text per version in `agent_prompts` table, association on every agent call. |
+### 1. Full Contract Discovery via API
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | Currently only 4 contracts are hardcoded in `INITIAL_CONTRACTS`. Kalshi has 12 event tickers with dozens of child contracts. The system is literally blind to most tradeable instruments. |
+| **What It Is** | Programmatic enumeration of all child markets under each event ticker using Kalshi's `/markets?event_ticker=X` and `/events?with_nested_markets=true` endpoints. Catalog resolution criteria, settlement dates, status, volume, and liquidity for each. |
+| **Complexity** | Low |
+| **Depends On** | Existing `KalshiClient._request()` -- already works for authenticated calls |
+| **Existing Code** | `brief.py` lines 773-789 already iterate `IRAN_EVENT_TICKERS` and call `/markets?event_ticker=...`. The gap is that discovered contracts are used for market prices only, never registered in the contract registry. |
+| **Implementation** | Extend `_fetch_kalshi_markets()` to also call `registry.upsert()` for every discovered contract. Store `rules_primary`, `rules_secondary` (resolution criteria text), `close_time`, `settlement_timer_seconds`, `volume_fp`, `open_interest_fp`. Mark inactive when status is "closed" or "settled". |
+| **Confidence** | HIGH -- Kalshi API docs confirm `/markets` returns `rules_primary`, `rules_secondary`, `settlement_value_dollars`, `status`, `volume_fp`, `open_interest_fp`. Already fetching this data; just not persisting it. |
+| **Key Metadata** | Volume (liquidity filter), open interest (market participation), settlement date (time horizon), resolution criteria text (model alignment), price level structure (for oil strike contracts like T80, T135, T140). |
+
+### 2. Model-Contract Alignment: Resolution Criteria Mapping
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | The system currently maps models to contracts via hardcoded `proxy_map` dicts. When new contracts are discovered, they have no proxy classification. The mapping policy has no way to handle contracts it has never seen. |
+| **What It Is** | Every contract's resolution criteria text (`rules_primary`) must be parsed to determine which model(s) can generate fair-value estimates for it, and at what proxy class (DIRECT, NEAR_PROXY, LOOSE_PROXY, NONE). |
+| **Complexity** | Medium |
+| **Depends On** | Contract Discovery (above), existing `ProxyClass` enum and `MappingPolicy._estimate_fair_value()` |
+| **Existing Code** | `MappingPolicy._classify_contract_family()` already does keyword-based classification into `ContractFamily` enum. `_estimate_fair_value()` dispatches on `(model_id, contract_family)` pairs. |
+| **Implementation** | Two-layer approach: (a) rule-based classification using ticker patterns + resolution criteria keywords (extend `_classify_contract_family`), (b) manual override table for edge cases. For each new `ContractFamily` value, add a corresponding fair-value estimator in `_estimate_fair_value()`. New families needed: `IRAN_DEMOCRACY`, `IRAN_LEADERSHIP`, `IRAN_EMBASSY`, `OIL_RIG_COUNT`. |
+| **Confidence** | HIGH -- The pattern is already established. The gap is just coverage, not architecture. |
+| **Critical Detail** | Oil contracts have a `price_level_structure` (e.g., T80 = $80 strike). Must parse this from the ticker to parameterize the oil extreme probability estimator. Currently only handled for KXWTIMAX/KXWTIMIN parent tickers, not child strike contracts. |
+
+### 3. Market Price Anchoring Removal from Prompts
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | All three model prompts currently inject `Current market prices: {market_prices_text}`. Research confirms LLMs exhibit anchoring bias -- presenting market prices before asking for probability estimates systematically biases the model toward the market's view, which is exactly the opposite of finding edge. |
+| **What It Is** | Remove market price injection from the prediction prompt. The model should estimate probabilities from fundamentals (news, cascade analysis, crisis context), then the MappingPolicy compares model output to market prices. |
+| **Complexity** | Low |
+| **Depends On** | Nothing -- this is a prompt change only |
+| **Existing Code** | `OIL_PRICE_SYSTEM_PROMPT`, `CEASEFIRE_SYSTEM_PROMPT`, `HORMUZ_SYSTEM_PROMPT` all include `{market_prices_text}`. `_format_market_prices()` in each predictor formats current market state. |
+| **Implementation** | Remove `{market_prices_text}` from all three system prompts. Remove the `market_prices` parameter from `predict()` methods. Keep market data flowing to `MappingPolicy.evaluate()` where it belongs -- for edge calculation, not probability estimation. |
+| **Research Evidence** | Springer (2025): "forecasts are significantly influenced by prior mention of high or low values." SSRN (2025): "LLM answers are sensitive to biased hints... they anchor their judgments on that information." This is the single highest-ROI prompt fix. |
+| **Confidence** | HIGH -- Both research and first-principles reasoning confirm this is a structural flaw. |
+
+### 4. Crisis Context Gap Fill (Aug 2025 - Feb 2026)
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | `crisis_context.py` currently has "Background: 2025 Iran-US Tensions" with 3 bullet points covering 6 months. Claude's training cutoff is Aug 2025. The escalation from failed Geneva talks through the June 2025 air conflict to the Feb 2026 war onset is critical context the model lacks. |
+| **What It Is** | Research and document the escalation timeline from August 2025 through February 2026: failed nuclear talks, IAEA reports, Iranian enrichment milestones, Israeli intelligence assessments, US force posture changes, Gulf state diplomatic moves. Convert from monolithic string to file-based context system. |
+| **Complexity** | Medium (research-intensive, not code-intensive) |
+| **Depends On** | Nothing -- standalone research task |
+| **Existing Code** | `crisis_context.py` is a single `CRISIS_TIMELINE` string literal, ~130 lines. `get_crisis_context()` returns the whole string. |
+| **Implementation** | (a) Research Aug 2025 - Feb 2026 escalation events from news archives. (b) Split context into YAML/JSON files: `context/pre_crisis.yaml`, `context/war_phase.yaml`, `context/ceasefire_phase.yaml`. (c) `get_crisis_context()` assembles from files, with date-gating for backtests. (d) Add market-specific context per contract family. |
+| **Confidence** | HIGH for code approach; MEDIUM for historical accuracy (requires manual verification of events) |
+
+### 5. Resolution Backtesting Against Settled Contracts
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | The backtest engine (`backtest/engine.py`) currently scores against next-day price movement, not settlement outcomes. This measures day-trading edge, but the actual strategy is hold-to-settlement. Without settlement-based scoring, we cannot validate the core thesis. |
+| **What It Is** | Run improved models against historical market prices, generate signals, then score against actual Kalshi settlement outcomes (YES=1.0, NO=0.0). Compute settlement P&L, not mark-to-market P&L. |
+| **Complexity** | Medium |
+| **Depends On** | Contract Discovery (to know which contracts have settled), Resolution Checker (already exists in `scoring/resolution.py`) |
+| **Existing Code** | `backtest/engine.py` has `SETTLEMENT_DATA` dict with `settled: None` for 9 contracts. `_score_results()` compares to next-day price. `scoring/resolution.py` can poll Kalshi for actual settlements. |
+| **Implementation** | (a) Populate `SETTLEMENT_DATA` with actual settlement outcomes from Kalshi API. (b) Add `_score_against_settlement()` function that computes: signal correctness (BUY_YES on YES-settled = win), settlement P&L (resolution_price - entry_price), fee-adjusted P&L. (c) Compute aggregate metrics: hit rate, Brier score, calibration gap, fee-adjusted Sharpe, maximum drawdown. |
+| **Key Metrics** | Settlement hit rate, Brier score (target < 0.15), calibration bucket gaps, fee-adjusted cumulative P&L, win rate by proxy class. These align with PredictionMarketBench evaluation framework metrics. |
+| **Confidence** | HIGH -- `resolution.py` already knows how to check Kalshi settlements. Backtest engine already generates predictions per day. Gap is purely in the scoring function. |
+
+### 6. Track Record Sample Size Guards
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | Track records are injected into prompts (e.g., "You predicted X% ceasefire probability 3 times and were right 1 time"). With < 10 data points, these stats are noise. Presenting them to the model as "your track record" could reinforce bad calibration or cause overcorrection. |
+| **What It Is** | Only inject track record into prompts when sample size exceeds a minimum threshold (e.g., n >= 10). Below that threshold, inject "Insufficient data for track record (n=X). Rely on your analysis." |
+| **Complexity** | Low |
+| **Depends On** | Existing `scoring/track_record.py` |
+| **Implementation** | Add `min_sample_size` parameter to `build_track_record()`. If count < threshold, return cautionary text instead of misleading statistics. |
+| **Confidence** | HIGH -- straightforward guard |
+
+### 7. Bypass Flow Fix in Cascade Engine
+
+| Aspect | Detail |
+|--------|--------|
+| **Why Expected** | `bypass_flow` is always 0 in the oil price predictor because the cascade engine computation path does not populate it. This means the model sees "bypass_flow=0 bbl/day" even when Saudi/UAE rerouting is happening, giving an artificially pessimistic supply picture. |
+| **What It Is** | Actually compute bypass flow from the cascade engine and inject the result into the oil price prompt. |
+| **Complexity** | Low |
+| **Depends On** | Cascade engine understanding |
+| **Existing Code** | `oil_price.py` line 93: `bypass_flow = 0.0`. Never updated. `cascade.py` has bypass computation but it is never called in the predictor. |
+| **Implementation** | Call the cascade bypass computation after blockade analysis and feed the result into the prompt. |
+| **Confidence** | HIGH -- known bug, clear fix |
 
 ---
 
 ## Differentiators
 
-Features that make Parallax more valuable than reading news + making mental predictions. Not expected in MVP but each one meaningfully increases tool value.
+Features that create real edge over other prediction market bots. Not expected by baseline, but each one compounds into the system's core value proposition: reasoning depth on second-order effects.
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Automated prompt improvement loop** | Agents whose predictions score poorly get their prompts refined automatically. This is the "continuously improved" part of the value prop. No other tool does this. | High | Pipeline: eval scores per agent -> identify worst performers -> generate prompt patches (meta-LLM call) -> A/B test new prompt vs old -> promote winner. Must respect $20/day budget. This is the hardest and most novel feature. |
-| **Per-agent accuracy leaderboard** | Shows which agents (IRGC analyst, CENTCOM analyst, MBS/Aramco) are most accurate. Reveals which actors the system models well vs poorly. | Low | Aggregate query over `eval_results` grouped by `agent_id`. Frontend component to display. Low effort, high insight. |
-| **Calibration curve visualization** | When agents say "70% confidence," are they right 70% of the time? Calibration plots are standard in forecasting evaluation (GJP, Metaculus). | Medium | Bucket predictions by stated confidence, compute actual hit rate per bucket, plot. Requires enough predictions to be statistically meaningful (50+ per bucket). |
-| **Cascade trace visualization** | Show the chain: "IRGC seized tanker -> flow reduced 30% -> price spiked $8 -> Saudi activated pipeline -> price settled at +$5." This is the unique simulation value. | Medium | Cascade engine returns effect dictionaries. Need to persist the full chain, then render as a timeline/flow diagram in frontend. |
-| **Prediction timeline / track record** | Scrollable history of predictions with outcomes. "On March 15, IRGC agent predicted oil above $95 by March 20 at 80% confidence -- CORRECT." | Low | Query `predictions` table with scores, render chronologically. Standard but very useful for analyst trust-building. |
-| **Counterfactual simulation** | "What if Iran blockades tomorrow?" -- run simulation forward from current state with injected event, compare to baseline. | High | Engine supports REPLAY mode. Need: snapshot current state, fork, inject event, run N ticks, diff outcomes. UI for event injection and comparison view. Defer to post-MVP. |
-| **Confidence-weighted aggregation** | Combine predictions from multiple agents into a single probability estimate, weighted by past accuracy. Ensemble forecast. | Medium | Standard technique: inverse Brier-score weighting or log-scoring. Produces a "Parallax consensus" prediction that should outperform any single agent. |
-| **Anomaly detection on incoming events** | Flag when GDELT event patterns deviate significantly from baseline (sudden spike in Iran-related military events). Alerting the analyst to "something unusual is happening." | Medium | Sliding window over curated_events, compute z-score on event frequency/Goldstein scale by actor pair. Alert when threshold exceeded. |
-| **Scenario comparison dashboard** | Side-by-side view of "current trajectory" vs "escalation scenario" vs "de-escalation scenario." | High | Requires multiple parallel simulation runs, state diffing, comparative visualization. Powerful but complex. Defer. |
-| **Source attribution on predictions** | Each prediction links back to the specific GDELT events that triggered the agent's reasoning. Analyst can verify the chain. | Low | Agent runner already receives events. Need to store event IDs alongside decision/prediction records, render in UI. |
+### 1. Rolling Daily Context with Self-Correction
+
+| Aspect | Detail |
+|--------|--------|
+| **Value Proposition** | Most LLM prediction bots treat each run as stateless -- the model sees today's news but has no memory of what it predicted yesterday or how events evolved. Rolling context gives the model multi-day narrative awareness, enabling detection of trend inflection points that single-snapshot analysis misses. |
+| **Complexity** | Medium |
+| **Depends On** | Crisis context refactor (file-based system), `prediction_log` table |
+| **How It Works** | After each cron run, append a structured JSON summary to a rolling context file: `{date, predictions: {model: prob}, market_prices: {ticker: price}, key_events: [...], outcome_if_known: ...}`. Load the last 5 days of context into prompts. Include self-correction prompt: "Here is what you predicted on previous days and what actually happened. Where were you wrong? What should you update?" |
+| **Anti-Anchoring Design** | Present yesterday's prediction AFTER the model has made its initial estimate. Use a two-pass prompt: (1) estimate from fundamentals only, (2) review against yesterday's prediction and revise if warranted with explicit rationale. This avoids self-anchoring while enabling learning. |
+| **Research Support** | Temporal pipelines that "embed time as a core dimension of the memory layer, ensuring retrieval that is chronologically coherent" outperform stateless approaches. Sliding window with rolling summaries is the established pattern for LLM memory systems. |
+| **Confidence** | MEDIUM -- the approach is well-established in LLM memory research, but the specific implementation for prediction market prompts is novel. Need to test whether self-correction actually improves calibration or just adds noise. |
+
+### 2. Model Registry Pattern (Models as Data)
+
+| Aspect | Detail |
+|--------|--------|
+| **Value Proposition** | `brief.py` currently hardcodes 3 model instantiations and manually orchestrates calls. Adding a 4th model (e.g., Iran political transition) requires editing brief.py in multiple places. A registry pattern makes models pluggable: add a model by registering it, not by rewriting the pipeline. |
+| **Complexity** | Medium |
+| **Depends On** | Nothing -- refactoring existing code |
+| **How It Works** | Define `ModelSpec` dataclass: `{model_id, predictor_class, contract_families, dependencies, weight}`. Registry stores specs. `run_brief()` iterates registry, instantiates predictors, gathers predictions. New models require only (a) a Predictor class and (b) a registry entry. |
+| **Why Not MLflow/Heavy Infra** | This is a single-analyst tool running 3-5 models, not a company-scale ML platform. A simple Python registry (dict of ModelSpec) is the right abstraction. MLflow/Vertex AI model registries are for 100+ models with team collaboration -- massive overkill here. |
+| **Confidence** | HIGH -- standard software pattern, low risk |
+
+### 3. Unified Ensemble Aggregation
+
+| Aspect | Detail |
+|--------|--------|
+| **Value Proposition** | Currently, the portfolio simulator (`simulator.py`) has its own weighted ensemble logic (`_aggregate_signals`) that is completely separate from the live pipeline in `brief.py`. Live signals are evaluated per-model without aggregation. This means backtest results do not reflect live behavior and vice versa. |
+| **Complexity** | Medium |
+| **Depends On** | Model Registry (above) |
+| **How It Works** | Extract the aggregation logic from `simulator.py._aggregate_signals()` into a shared `ensemble/aggregator.py`. Both `brief.py` and `simulator.py` call the same function. Weight signals by `(model_id, proxy_class)` hit rate from `signal_quality_evaluation`. |
+| **Research Support** | "Multi-model combination techniques can reduce average Brier score and total number of false alarms, resulting in improved reliability of forecasts." LLM ensemble predictions "rival human crowd accuracy" (Science Advances, 2024). |
+| **Key Decision** | Use hit-rate-weighted mean, not equal weighting. The simulator already does this. The gap is that live signals skip this step. |
+| **Confidence** | HIGH -- code already exists in simulator. This is extraction + sharing, not invention. |
+
+### 4. New Political Transition Model
+
+| Aspect | Detail |
+|--------|--------|
+| **Value Proposition** | Kalshi has 6+ event tickers for Iran political outcomes (democracy, Pahlavi, elections, embassy, leadership succession) that currently have `proxy_class: NONE` for all models. These are untradeable because no model generates fair-value estimates for them. Adding a political transition model unlocks 6+ new contract families. |
+| **Complexity** | Medium-High |
+| **Depends On** | Model Registry, Contract Discovery, Context Gap Fill |
+| **How It Works** | New `PoliticalTransitionPredictor` class, same pattern as ceasefire model but focused on regime change, elections, and diplomatic recognition. Input: crisis context + news events. Output: probabilities for regime transition, democratic elections, Pahlavi return, US embassy reopening. |
+| **Contract Families** | `IRAN_DEMOCRACY` (KXIRANDEMOCRACY), `IRAN_LEADERSHIP` (KXNEXTIRANLEADER), `PAHLAVI_HEAD` (KXPAHLAVIHEAD), `PAHLAVI_VISIT` (KXPAHLAVIVISITA), `IRAN_EMBASSY` (KXIRANEMBASSY), `RECOGNIZED_PERSON` (KXRECOGPERSONIRAN), `IRAN_ELECTION` (KXELECTIRAN) |
+| **Confidence** | MEDIUM -- the model pattern is proven, but political transition probability estimation is harder than oil/ceasefire because base rates are much lower and outcomes more speculative. |
+
+### 5. News Source Diversification
+
+| Aspect | Detail |
+|--------|--------|
+| **Value Proposition** | Currently dependent on Google News RSS (primary, working) and GDELT DOC API (secondary, frequently 429s). Single-source dependency means blind spots. Wire services and specialist feeds catch stories Google News misses or delays. |
+| **Complexity** | Low per source, Medium total |
+| **Depends On** | Existing `ingestion/` framework with `NewsEvent` dataclass and `event_hash` dedup |
+
+#### News Source Priority List
+
+| Source | Type | Cost | Latency | Value | Priority |
+|--------|------|------|---------|-------|----------|
+| Reuters World RSS | RSS | Free | 5-15min | Wire service quality, geopolitical depth | P1 |
+| AP News RSS | RSS | Free | 5-15min | Wire service, US policy focus | P1 |
+| Al Jazeera Middle East RSS | RSS | Free | 5-15min | Regional perspective, Iran coverage | P1 |
+| EIA "This Week in Petroleum" RSS | RSS | Free | Weekly | Official US energy analysis | P1 |
+| BBC Middle East RSS | RSS | Free | 5-15min | Global perspective | P2 |
+| ACLED API | REST | Free tier | Daily | Structured conflict event data with actors/locations | P2 |
+| NewsData.io | REST | Free 200/day | Minutes | 88K sources, geopolitical filter | P2 |
+| Oilprice.com RSS | RSS | Free | 15-60min | Oil market specialist | P2 |
+| S&P Global Platts | Paid API | $$$$ | Seconds | Gold standard for oil pricing | Out of scope for v1 |
+| Bloomberg Terminal API | Paid API | $$$$ | Seconds | Institutional grade | Out of scope for v1 |
+
+| **Confidence** | HIGH for RSS feeds (trivial to implement, same pattern as Google News); MEDIUM for REST APIs (rate limits, auth requirements vary) |
+
+### 6. Prompt Structure: Facts vs Hypothesis Separation
+
+| Aspect | Detail |
+|--------|--------|
+| **Value Proposition** | Current prompts mix factual context (crisis timeline, news events) with hypothesis injection ("Consider what the market may be missing"). This blurs the line between what the model knows and what it is speculating about. Explicit separation improves reasoning quality by giving the model clear epistemic grounding. |
+| **Complexity** | Low |
+| **Depends On** | Crisis context refactor |
+| **How It Works** | Structure prompts in explicit sections: `## FACTS (verified events)`, `## CURRENT DATA (prices, flows, volumes)`, `## YOUR TASK (estimate probability)`, `## REASONING GUIDELINES (how to think, not what to think)`. Remove suggestive language like "What the market may be missing" -- let the model discover that through analysis. |
+| **Research Support** | "Frequency-Based Reasoning, Base Rate First, and Step-Back demonstrated significant benefits relative to the minimalistic control." However: "prompt engineering has a minimal to nonexistent effect on the forecasting performance of LLMs." Takeaway: structure matters for preventing harm (anchoring, suggestion), but do not expect prompt tricks to be magic. Focus on getting the facts right, not the phrasing clever. |
+| **Confidence** | MEDIUM -- research is mixed on prompt engineering impact. The value here is more about preventing harm than creating benefit. |
 
 ---
 
 ## Anti-Features
 
-Features to explicitly NOT build. Common mistakes in intelligence/prediction platforms.
+Features to explicitly NOT build. Common mistakes in this domain that waste time or actively harm signal quality.
 
-| Anti-Feature | Why Avoid | What to Do Instead |
-|--------------|-----------|-------------------|
-| **Multi-user / auth system** | PROJECT.md explicitly scopes this as single-analyst tool. Auth adds complexity with zero value for v1. | Single-user, localhost only. Docker Compose already handles this. |
-| **Free-text prediction entry** | Unstructured predictions cannot be scored automatically. Every prediction platform that started with free-text had to retrofit structure later. | Force structured output from agents: direction (up/down/stable), magnitude range, timeframe, confidence float. Schema already enforces this. |
-| **Real-time LLM streaming to frontend** | Tempting to show agent "thinking" in real-time. But at 50 agents, this creates noise, burns budget on display tokens, and distracts from signal. | Batch agent decisions, push completed decisions only. Show "N agents processing..." loading state, then results. |
-| **Manual prediction scoring** | Analyst manually marking predictions as correct/incorrect does not scale and introduces bias. | Automated ground truth resolution from data sources (EIA, GDELT). Manual override only for edge cases. |
-| **Overly granular agent personas** | Tempting to model 200+ sub-actors. But each agent costs LLM tokens, and marginal agents (e.g., "Oman Foreign Ministry spokesperson") add noise without signal. | 50 agents across 12 countries is already aggressive. Focus on making existing agents better via eval, not adding more agents. |
-| **Historical backfill / backtesting UI** | Backend supports REPLAY mode, but building a full backtesting UI is a rabbit hole. The crisis is happening NOW. | Keep REPLAY mode as a developer/debugging tool. Ship forward-looking features first. |
-| **Complex notification system** | Push notifications, email alerts, SMS -- overengineered for a single-analyst local tool. | Simple in-app alert banner for anomalies and high-confidence predictions. No external notification channels. |
-| **Multi-scenario support** | Other conflicts (Ukraine, Taiwan) are out of scope for v1. Building generic scenario support prematurely abstracts the Hormuz-specific cascade rules. | Hard-code Hormuz scenario. Refactor to multi-scenario only if v1 succeeds and there is demand. |
-| **Explanation generation via separate LLM calls** | Do not make a separate LLM call to "explain" what happened. This doubles cost. | Agents already provide `reasoning` in their structured output. Use that directly. |
+### 1. Real-Time Latency Optimization
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Sub-second market data polling, WebSocket streaming, low-latency order submission |
+| **Why tempting** | "30%+ of Polymarket wallets are AI bots" -- sounds like a speed race |
+| **Why wrong for Parallax** | Edge is reasoning depth, not speed. The system runs 2x/day on cron. Market prices are 5-15min stale by design. The value proposition is finding structural mispricings that persist for hours/days, not arbitraging 400ms information advantages. Round-trip fees (5.5c) already kill active trading. |
+| **What to do instead** | Keep 2x/day cron cadence. Focus on reasoning quality over data freshness. |
+
+### 2. Cross-Platform Arbitrage
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Detecting price differences between Kalshi and Polymarket on "equivalent" contracts, buying low on one and selling high on the other |
+| **Why tempting** | "Risk-free" profit, multiple GitHub repos show this pattern |
+| **Why wrong for Parallax** | (a) Kalshi is paper-trading only -- cannot execute real arb. (b) Contract matching across platforms is a full-time engineering problem (different resolution criteria, different settlement dates). (c) Fees and settlement risk eat the spread. (d) Bots already arbitrage obvious mispricings in milliseconds. |
+| **What to do instead** | Use Polymarket as a second price signal for calibration. Compare model outputs to both markets. Do not try to trade the spread. |
+
+### 3. Superforecaster Persona Prompts
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Instructing the LLM to "respond as a superforecaster" or follow "the 10 commandments of superforecasting" |
+| **Why tempting** | Sounds like it should improve forecasting quality |
+| **Why research says no** | "Superforecaster-authored prompts actually reduced forecasting accuracy." "Prompt engineering has a minimal to nonexistent effect on the forecasting performance of LLMs." The 2025 research across OSF, ICLR, and arxiv is clear: LLM forecasting quality comes from model capability and information quality, not prompt persona tricks. |
+| **What to do instead** | Focus on information quality (better context, more sources, accurate facts). Use structured reasoning prompts (base rate, decomposition) but do not expect them to be transformative. Measure actual calibration instead of prompt complexity. |
+
+### 4. Automated Prompt Optimization / DSPy
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Using DSPy or similar frameworks to auto-optimize prompts via gradient descent on forecasting metrics |
+| **Why tempting** | "Let the computer figure out the best prompt" |
+| **Why wrong now** | (a) Requires hundreds of labeled examples -- we have < 50 signal evaluations. (b) Overfitting to small samples produces prompts that "work" on training data but fail on new events. (c) The cost of running optimization loops against Claude Opus is prohibitive ($20/day budget). (d) Research shows prompt structure matters less than information quality for forecasting. |
+| **What to do instead** | Manual A/B testing on specific prompt changes (e.g., anchoring removal). Compare Brier scores before/after. When sample size exceeds 100, revisit automated optimization. |
+
+### 5. Multi-Scenario Expansion (Non-Iran)
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Expanding to predict other domains (elections, crypto, weather) before proving edge on Iran |
+| **Why tempting** | More markets = more opportunities |
+| **Why wrong now** | The entire system architecture is tuned for the Iran-Hormuz crisis: cascade engine, crisis context, domain-specific models. Generalizing before validating on the core domain is premature abstraction. The ceasefire window ends April 21 -- this is the validation deadline. |
+| **What to do instead** | Prove edge on Iran first. If settlement P&L is positive and Brier < 0.15, then consider expansion in v2.0. |
+
+### 6. Complex Ensemble Methods (Bayesian Model Averaging, Stacking)
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Sophisticated ensemble techniques that weight models dynamically based on posterior probabilities or learned meta-models |
+| **Why tempting** | "More sophisticated = more accurate" |
+| **Why wrong now** | With 3-5 models and < 50 resolved signals, there is not enough data to train a meta-model or compute meaningful Bayesian posteriors. Hit-rate-weighted mean is the right level of sophistication for the current sample size. |
+| **What to do instead** | Use hit-rate-weighted ensemble (already in simulator). Track per-model Brier scores. When sample size exceeds 200 per model, consider Bayesian model averaging. |
+
+### 7. Active Exit/Sell Trading
+
+| Anti-Feature | Why Avoid |
+|--------------|-----------|
+| **What it is** | Selling positions before settlement based on mark-to-market P&L or model probability changes |
+| **Why established as wrong** | Round-trip fees of 5.5c vs hold-to-settlement fees of 2.8c. Fee math kills active exits. This was already validated and documented as a key decision in PROJECT.md. |
+| **What to do instead** | Hold to settlement. Track edge decay data. Revisit only if fee structure changes or sample size reveals specific conditions where early exit is profitable net of fees. |
 
 ---
 
 ## Feature Dependencies
 
 ```
-Ground Truth Fetching ─────────────┐
-                                   v
-Prediction Logging ──────> Prediction Scoring ──────> Eval Results
-                                   │                       │
-                                   v                       v
-                           Daily Eval Cron          Per-Agent Leaderboard
-                                                           │
-                                                           v
-                                                    Prompt Improvement Loop
-                                                           │
-                                                           v
-                                                    Agent Prompt Versioning
+Contract Discovery
+    |
+    +---> Model-Contract Alignment (needs contracts to classify)
+    |         |
+    |         +---> New Political Model (needs contract families defined)
+    |         |
+    |         +---> Resolution Backtest (needs settlement data from discovered contracts)
+    |
+    +---> Bypass Flow Fix (independent, but tested against discovered contracts)
 
-End-to-End Pipeline ──────> WebSocket Live Push ──────> Frontend Wired to Real Data
-       │                                                       │
-       v                                                       v
-FastAPI REST Endpoints                              Cascade Trace Visualization
-                                                    Prediction Timeline
-                                                    Calibration Curve
+Crisis Context Gap Fill
+    |
+    +---> Rolling Daily Context (needs file-based context system)
+    |
+    +---> New Political Model (needs pre-crisis political context)
 
-Prediction Scoring + Agent Leaderboard ──────> Confidence-Weighted Aggregation
+Anchoring Removal  <-- INDEPENDENT, can ship immediately
+Track Record Guards <-- INDEPENDENT, can ship immediately
+Bypass Flow Fix    <-- INDEPENDENT, can ship immediately
+
+Model Registry
+    |
+    +---> Unified Ensemble (needs registry to iterate models)
+    |
+    +---> New Political Model (registered as new model spec)
+
+News Diversification <-- INDEPENDENT per source, can ship incrementally
+
+Prompt Structure Refactor
+    |
+    +---> Anchoring Removal (specific case of prompt restructuring)
 ```
-
-**Critical path:** End-to-end pipeline must come first. Nothing else works without the orchestration loop running. Then prediction logging + scoring, because the core value prop is evaluated predictions. Then prompt improvement, because that is the flywheel.
-
-**Parallel tracks possible:**
-- API + WebSocket (backend) can develop in parallel with frontend data binding
-- Scoring + ground truth (eval track) can develop in parallel with pipeline integration
-- Leaderboard + calibration (visualization) can develop after scoring exists
 
 ---
 
 ## MVP Recommendation
 
-For MVP (the tool is usable by the analyst to gain insight on the live crisis):
+For this milestone, prioritize in this order:
 
-**Phase 1 -- Pipeline Integration (must be first):**
-1. End-to-end data pipeline (orchestration loop)
-2. FastAPI REST endpoints
-3. WebSocket live push
+### Must Ship (validates core thesis)
 
-**Phase 2 -- Eval Foundation:**
-4. Prediction logging with structured schema (parsing agent output)
-5. Ground truth fetching (EIA prices, GDELT event verification)
-6. Prediction scoring (Brier score + direction/magnitude)
-7. Daily eval cron
+1. **Anchoring Removal** -- Highest ROI fix. Research-backed. 30 minutes of work. Removes structural bias from every prediction.
+2. **Bypass Flow Fix** -- Known bug producing incorrect cascade analysis. Quick fix.
+3. **Track Record Guards** -- Prevents small-sample noise from polluting predictions. Quick fix.
+4. **Contract Discovery** -- Unlocks visibility into 12 event tickers and all child contracts. Required foundation for everything else.
+5. **Model-Contract Alignment** -- Makes discovered contracts tradeable. Requires new proxy classifications and fair-value estimators for each contract family.
+6. **Resolution Backtesting** -- Validates hold-to-settlement thesis. Required to know if the system has actual edge.
+7. **Crisis Context Gap Fill** -- Fills the 6-month knowledge hole. Research-intensive but high impact on model accuracy.
 
-**Phase 3 -- Frontend + Visibility:**
-8. Frontend panels wired to real data
-9. Per-agent accuracy leaderboard
-10. Prediction timeline / track record
-11. Source attribution on predictions
+### Should Ship (improves signal quality)
 
-**Phase 4 -- Intelligence Flywheel:**
-12. Automated prompt improvement loop
-13. Confidence-weighted aggregation
-14. Calibration curve visualization
-15. Cascade trace visualization
+8. **Model Registry** -- Enables adding new models without pipeline surgery. Required before political model.
+9. **Unified Ensemble** -- Makes backtest and live pipeline consistent. Straightforward extraction from existing simulator code.
+10. **Prompt Structure Refactor** -- Facts vs hypothesis separation. Moderate impact, low risk.
+11. **News Diversification (P1 sources)** -- Reuters, AP, Al Jazeera RSS feeds. Same implementation pattern as existing Google News, low effort per source.
 
-**Defer to post-MVP:**
-- Counterfactual simulation
-- Scenario comparison dashboard
-- Anomaly detection (nice-to-have, not core)
+### Defer to post-validation
 
-**Rationale:** The ordering follows the data flow. You cannot score predictions that do not exist. You cannot improve prompts without scores. You cannot show data in the frontend without an API. Each phase unlocks the next.
+12. **Rolling Daily Context** -- High value but needs careful anti-anchoring design. Ship after settlement-based validation proves the base system works.
+13. **New Political Model** -- Depends on registry + context + alignment. Ship after core models are validated against settlements.
+14. **News Diversification (P2 sources)** -- ACLED, NewsData.io, etc. Incremental value, ship after core pipeline is solid.
 
 ---
 
-## Complexity Budget
+## Scoring Metrics for Settlement-Based Validation
 
-Given the $20/day LLM budget and single-developer context:
+Based on PredictionMarketBench evaluation framework and forecasting research, these are the metrics that matter for a hold-to-settlement strategy:
 
-| Feature Category | Estimated Effort | LLM Cost Impact |
-|-----------------|-----------------|-----------------|
-| Pipeline integration | 2-3 days | None (wiring work) |
-| API + WebSocket | 1-2 days | None |
-| Prediction scoring | 2-3 days | None (computation only) |
-| Ground truth fetching | 1-2 days | None (API calls to EIA/GDELT) |
-| Frontend data binding | 3-4 days | None |
-| Prompt improvement loop | 3-5 days | +$2-5/day for meta-LLM calls (must fit in $20 cap) |
-| Calibration + leaderboard | 1-2 days | None |
-| Cascade trace viz | 2-3 days | None |
+| Metric | What It Measures | Target | Current State |
+|--------|-----------------|--------|---------------|
+| Settlement Hit Rate | % of BUY signals that settle in the money | > 55% | Unknown (no settlement scoring) |
+| Brier Score | Calibration + discrimination combined | < 0.15 | Unknown |
+| Calibration Gap | Max |predicted - actual| across probability buckets | < 0.10 | N/A (insufficient data) |
+| Fee-Adjusted P&L | Cumulative settlement P&L minus all fees | > $0 | -$0.35 (next-day scoring, not settlement) |
+| Sharpe Ratio | Risk-adjusted return | > 0.5 annualized | N/A |
+| Win Rate by Proxy Class | Hit rate for DIRECT vs NEAR_PROXY vs LOOSE_PROXY | DIRECT > NEAR > LOOSE | Unknown |
+| Edge Size vs Outcome | Correlation between predicted edge size and actual profit | Positive | Unknown |
 
-**Total MVP estimate:** 15-24 days of focused development.
-
-**Budget note:** The prompt improvement loop is the only new feature that consumes LLM budget. Meta-prompting calls (analyzing agent performance, generating prompt patches) should use Haiku to stay within the $20/day cap. Allocate ~$3/day for meta-prompting, leaving $17/day for the 50 agent swarm.
-
----
-
-## Scoring System Design Notes
-
-This section provides detail on the scoring approach since it is central to the platform's value.
-
-**Brier Score** (standard for probabilistic forecasting):
-- Formula: BS = (forecast_probability - outcome)^2
-- Range: 0 (perfect) to 1 (worst)
-- Used by: GJP, Metaculus, IARPA ACE program
-- Apply to: binary predictions (will X happen by date Y?)
-
-**Direction Accuracy** (for directional predictions):
-- Did the agent correctly predict up/down/stable?
-- Simple binary scoring per prediction
-- Apply to: oil price direction, escalation/de-escalation, flow changes
-
-**Magnitude Accuracy** (for quantitative predictions):
-- Agent predicts range [low, high]. Ground truth falls in range = full credit.
-- Outside range: score decays with distance (normalized by range width)
-- Apply to: oil price level, flow reduction percentage
-
-**Calibration Score:**
-- Group predictions by stated confidence bucket (50-60%, 60-70%, etc.)
-- Compare average stated confidence to actual hit rate
-- Perfect calibration: 70% confidence predictions are correct 70% of the time
-- Requires 30+ predictions per bucket to be meaningful -- will take weeks to accumulate
-
-**Miss Tags** (for learning from errors):
-- When a prediction is wrong, categorize the miss: `timing` (right direction, wrong timeframe), `magnitude` (right direction, wrong scale), `direction` (completely wrong), `black_swan` (unpredictable exogenous event)
-- Feed miss tags into prompt improvement: "Agent X consistently has timing misses -- adjust temporal reasoning in prompt"
+Note: Prediction markets historically achieve Brier scores near 0.09. The system's target of < 0.15 is deliberately conservative -- achieving it would indicate the models are producing useful probability estimates, even if not yet at market-aggregate quality.
 
 ---
 
 ## Sources
 
-- Domain knowledge of forecasting evaluation: Good Judgment Project methodology (Tetlock, "Superforecasting"), IARPA ACE/SAGE program design, Metaculus scoring rules
-- Brier score is the standard metric in probabilistic forecasting literature (Brier 1950, widely adopted)
-- Calibration curves are standard in weather forecasting and have been adapted by GJP and Metaculus
-- Existing Parallax codebase: `schema.py` (prediction and eval_results tables), `queries.py`, `config.py`
-- PROJECT.md active requirements list
+### Contract Discovery
+- [Kalshi Get Events API](https://docs.kalshi.com/api-reference/events/get-events) -- `with_nested_markets` parameter, HIGH confidence
+- [Kalshi Get Markets API](https://docs.kalshi.com/api-reference/market/get-markets) -- `event_ticker`, `status`, `volume_fp`, `rules_primary` fields, HIGH confidence
+- [Kalshi API Guide 2026](https://pm.wiki/learn/kalshi-api) -- four-level hierarchy (Categories > Series > Events > Markets), MEDIUM confidence
 
-**Confidence:** MEDIUM -- Feature categorization is based on established forecasting platform patterns and the specific project requirements. Scoring methodology (Brier score, calibration) is HIGH confidence as these are well-established standards. Effort estimates are MEDIUM confidence (single-developer, integration complexity is hard to estimate precisely). The prompt improvement loop is LOW confidence for effort -- this is novel and the hardest feature to get right.
+### Anchoring Bias
+- [Anchoring Bias in LLMs (Springer, 2025)](https://link.springer.com/article/10.1007/s42001-025-00435-2) -- "forecasts significantly influenced by prior mention of high or low values", HIGH confidence
+- [Anchoring Bias in LLMs (arxiv, 2024)](https://arxiv.org/html/2412.06593v1) -- "like humans, they anchor their judgments on that information", HIGH confidence
+- [Human Bias in AI Models (ScienceDirect)](https://www.sciencedirect.com/science/article/pii/S2214635024000868) -- mitigation strategies have mixed effectiveness, MEDIUM confidence
+
+### Prompt Engineering for Forecasting
+- [Prompt Engineering LLM Forecasting (OSF, 2025)](https://osf.io/mcr78/) -- "prompt engineering has minimal to nonexistent effect on forecasting performance", HIGH confidence
+- [LLM vs Superforecasters (arxiv, 2025)](https://arxiv.org/html/2507.04562v3) -- "experts achieve Brier 0.023 vs o3's 0.135", HIGH confidence
+- [LLM Ensemble Prediction (Science Advances, 2024)](https://www.science.org/doi/10.1126/sciadv.adp1528) -- ensemble predictions rival human crowd accuracy, HIGH confidence
+
+### Backtesting Framework
+- [PredictionMarketBench (arxiv, Jan 2026)](https://arxiv.org/html/2602.00133) -- standardized metrics for prediction market agent evaluation including P&L, drawdown, Sharpe, fees, fill ratio, HIGH confidence
+- [PredictionMarketBench GitHub](https://github.com/Oddpool/PredictionMarketBench) -- open source framework with Kalshi replay data, HIGH confidence
+
+### News Sources
+- [Free News APIs 2026 (NewsData.io)](https://newsdata.io/blog/best-free-news-api/) -- tested APIs with rate limits and limitations, MEDIUM confidence
+- [Reuters RSS Feeds](https://rss.feedspot.com/reuters_rss_feeds/) -- feed URLs for world, business, politics, HIGH confidence
+- [ACLED Conflict Data](https://acleddata.com/) -- structured conflict event data with actors/locations, MEDIUM confidence
+
+### Ensemble and Calibration
+- [Brier Score (Wikipedia)](https://en.wikipedia.org/wiki/Brier_score) -- scoring rule definition and decomposition, HIGH confidence
+- [Multi-Model Ensemble Review (ScienceDirect, 2026)](https://www.sciencedirect.com/science/article/abs/pii/S1474706526001245) -- 89-study survey of aggregation methods, MEDIUM confidence
+- [Weighted Brier Score (PMC)](https://pmc.ncbi.nlm.nih.gov/articles/PMC12523994/) -- clinical utility weighted variants, MEDIUM confidence
+
+### Temporal Context / Memory
+- [LLM Context Problem 2026 (LogRocket)](https://blog.logrocket.com/llm-context-problem/) -- sliding windows, rolling summaries, hierarchical compression, MEDIUM confidence
+- [Temporal Cognification (Cognee)](https://www.cognee.ai/blog/cognee-news/unlock-your-llm-s-time-awareness-introducing-temporal-cognification) -- time-aware memory, temporal knowledge graphs, LOW confidence
+- [Memory for AI Agents (ICLR 2026 Workshop)](https://openreview.net/pdf?id=U51WxL382H) -- agent memory survey, MEDIUM confidence
+
+### Model Registry
+- [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/) -- centralized lifecycle management pattern, HIGH confidence (for understanding pattern; actual tool is overkill for this project)

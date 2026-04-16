@@ -3,42 +3,80 @@
 **Defined:** 2026-04-09
 **Core Value:** Find mispriced prediction market contracts by reasoning about second-order cascade effects -- validated via paper trading P&L.
 
-## v1.3 Requirements
+## v1.4 Requirements
 
-Requirements for milestone v1.3: Daily Feedback Loop + Scorecard.
+Requirements for milestone v1.4: Model Intelligence + Resolution Validation.
+
+### Prompt Optimization
+
+- [ ] **PROMPT-01**: All prediction model prompts produce probabilities without seeing current market prices (anchoring removal)
+- [ ] **PROMPT-02**: Oil price model receives computed bypass flow from cascade engine (not hardcoded 0)
+- [ ] **PROMPT-03**: Hormuz model outputs a single well-defined probability matching one contract resolution criterion (fix dual-probability spec)
+- [ ] **PROMPT-04**: Track record injection requires minimum sample size (n>=10) before showing hit rate statistics
+- [ ] **PROMPT-05**: Crisis context separates verifiable facts from editorial hypotheses — models receive facts only in base context
+
+### Contract Discovery
+
+- [ ] **DISC-01**: System enumerates all child contracts from Kalshi API for all 12 event tickers, persisting resolution criteria, volume, settlement status
+- [ ] **DISC-02**: Every discovered contract is classified into a contract family with proxy mappings per model type
+- [ ] **DISC-03**: Fair-value estimators exist for each new contract family (IRAN_DEMOCRACY, IRAN_LEADERSHIP, PAHLAVI, IRAN_EMBASSY, OIL_RIG)
+- [ ] **DISC-04**: Settled contracts are identified and their settlement outcomes recorded for backtesting
+
+### Context Intelligence
+
+- [ ] **CTX-01**: Pre-crisis context document covers Aug 2025 through Feb 2026 escalation with verifiable events, dates, and data points
+- [ ] **CTX-02**: Crisis context loads from files on disk (not hardcoded Python strings), composable for backtests via date gating
+- [ ] **CTX-03**: Each cron run appends a structured summary (predictions, market snapshot, key headlines) to rolling context
+- [ ] **CTX-04**: Models receive a rolling 5-day context window with previous predictions and outcomes for temporal awareness
+
+### Model Architecture
+
+- [ ] **ARCH-01**: brief.py uses a model registry pattern — adding a new model requires only a predictor class + registry entry, not pipeline surgery
+- [ ] **ARCH-02**: Live pipeline and simulator use the same weighted ensemble aggregation logic (unified, not split-brain)
+- [ ] **ARCH-03**: New "Iran political transition" model covers regime-change contract families using the standard PredictionOutput interface
+- [ ] **ARCH-04**: Dead dependencies removed from pyproject.toml (h3, sentence-transformers, searoute, shapely, google-cloud-bigquery, websockets)
+
+### Prompt-Contract Alignment (from thesis review 2026-04-15)
+
+- [ ] **ALIGN-01**: Each model prompt asks a question that maps directly to the settlement event/horizon of its target contracts — no horizon/basis mismatches (oil model asks contract-native question, not 7d Brent direction for year-end WTI contracts)
+- [ ] **ALIGN-02**: Ceasefire model renamed to "iran_agreement" (model_id, prediction_type) to match what the prompt actually predicts (formal US-Iran agreement by mid-2027, not 14d ceasefire)
+- [ ] **ALIGN-03**: Proxy class discounts are applied to edge calculation — NEAR_PROXY and LOOSE_PROXY mappings haircut effective edge by their discount factor, not hardcoded 1.0
+- [ ] **ALIGN-04**: Ensemble aggregation accounts for model correlation — signals from models sharing identical inputs are not treated as independent evidence for position sizing
+
+### News Diversification
+
+- [ ] **NEWS-01**: AP News RSS feeds integrated as news source with keyword filtering and dedup against existing Google News events
+- [ ] **NEWS-02**: At least 2 additional RSS sources (from: Al Jazeera Middle East, BBC Middle East, EIA weekly petroleum) integrated
+- [ ] **NEWS-03**: News ingestion is parameterized — adding a new RSS source requires only a URL + keyword list, not code changes
+
+### Resolution Validation
+
+- [ ] **VALID-01**: Resolution backtest runs models against settled contracts and scores against actual settlement outcomes (not next-day price)
+- [ ] **VALID-02**: Settlement-based metrics computed: hit rate, Brier score, fee-adjusted P&L, win rate by proxy class
+- [ ] **VALID-03**: Backtest results compared before/after prompt fixes to attribute improvement
+
+## v1.3 Requirements (deprioritized)
+
+Moved from active to deferred. Model intelligence has higher ROI than telemetry at current data sparsity.
 
 ### Telemetry Infrastructure
 
-- [ ] **TEL-01**: Pipeline persists run-level metadata (run_id, started_at, ended_at, status, environment) in a `runs` table
-- [ ] **TEL-02**: Structured alerts from AlertDispatcher are persisted in an `ops_events` table
-- [ ] **TEL-03**: LLM token counts and costs are persisted per-call in an `llm_usage` table
-- [ ] **TEL-04**: "No run in 24h" alert fires when pipeline stops running
+- **TEL-01**: Pipeline persists run-level metadata in a `runs` table
+- **TEL-02**: Structured alerts persisted in `ops_events` table
+- **TEL-03**: LLM token/cost persisted in `llm_usage` table
+- **TEL-04**: "No run in 24h" alert
 
 ### Daily Scorecard
 
-- [ ] **SCORE-01**: `daily_scorecard` table stores computed metrics per day with metric name, value, and dimensions
-- [ ] **SCORE-02**: `parallax scorecard --date YYYY-MM-DD` CLI command computes and persists all metrics
-- [ ] **SCORE-03**: Signal Quality metrics: resolved volume, counterfactual PnL, hit rate, Brier score, calibration bucket gaps, edge-decay, tradeability funnel
-- [ ] **SCORE-04**: Execution Quality metrics: orders attempted/accepted, fill rate, time-to-fill, slippage vs reference, fees per contract
-- [ ] **SCORE-05**: Portfolio/Risk metrics: gross exposure, concentration, daily realized PnL, loss-cap utilization
-- [ ] **SCORE-06**: Data Quality metrics: executable quote coverage, quote staleness rate, market freshness
-- [ ] **SCORE-07**: Ops/Runtime metrics: pipeline run count, run success rate, latest run age
+- **SCORE-01** through **SCORE-07**: Daily scorecard ETL + metrics across 5 categories
 
 ### Alerting + Dashboard
 
-- [ ] **ALERT-01**: Scorecard threshold breaches trigger alerts via AlertDispatcher
-- [ ] **ALERT-02**: Hard safety thresholds (loss cap, stale quote spike, fill collapse) automatically halt new execution
-- [ ] **ALERT-03**: `/api/scorecard` endpoint serves scorecard data for dashboard consumption
-- [ ] **ALERT-04**: Minimal dashboard with KPI tiles, Brier score timeseries, reliability diagram, order funnel
+- **ALERT-01** through **ALERT-04**: Threshold alerting, safety halts, API endpoint, minimal dashboard
 
 ### Feedback Automation + Experiments
 
-- [ ] **EXP-01**: `experiment_id` and `variant` tags added to prediction_log, signal_ledger, trade_orders, trade_positions
-- [ ] **EXP-02**: Champion/challenger routing allocates signals between strategy variants
-- [ ] **EXP-03**: Bounded parameter update engine: tighten min_edge per proxy class (never loosen automatically)
-- [ ] **EXP-04**: Cost model auto-updates from realized slippage/fees (upward only, capped)
-- [ ] **EXP-05**: Minimum sample size guards (n>=50 for calibration, n>=30 for thresholds, n>=30 for sizing)
-- [ ] **EXP-06**: Sequentially valid inference for online monitoring (always-valid p-values)
+- **EXP-01** through **EXP-06**: Experiment tags, champion/challenger, bounded updates, sequential inference
 
 ## v1.2 Requirements (completed)
 
@@ -67,67 +105,66 @@ Requirements for milestone v1.3: Daily Feedback Loop + Scorecard.
 
 ## v2 Requirements
 
-Deferred from v1.2. Tracked but not in current roadmap.
-
 ### Deployment
 
-- **DEPLOY-01**: Docker health checks and graceful restart
-- **DEPLOY-02**: FastAPI endpoints return real pipeline data
-- **DEPLOY-03**: Graceful API failure handling with retry + fallback
-- **DEPLOY-04**: Structured logging audit trail per pipeline run
+- **DEPLOY-01** through **DEPLOY-04**: Docker hardening, API hydration, error handling, logging
 
 ### Expansion
 
-- **THESIS-01**: Framework for adding new thesis domains
-- **THESIS-02**: At least one additional thesis domain with active contracts
-- **THESIS-03**: New model integrated into existing pipeline
+- **THESIS-01** through **THESIS-03**: Multi-domain framework, new thesis, new model
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Full observability stack (OpenTelemetry/Prometheus) | Overkill for single-analyst CLI tool; DuckDB metrics sufficient |
-| Real-time streaming dashboard | CLI-first; batch scorecard is sufficient for daily loop |
-| Automated risk increase | Safety principle: auto-actions may tighten but never loosen without human review |
-| ML-based model selection | Premature; need statistical significance on base models first |
-| Multi-user experiment management | Single analyst; experiment tags are for self-comparison only |
-| 50-agent swarm | Replaced by 3 focused prediction models |
-| H3 spatial visualization / deck.gl map | Deleted -- CLI tool does not need maps |
-| Frontend dashboard (React/Vite) | Deleted -- CLI-first |
-| Real-money trading | Paper trading only until edge is proven |
-| Latency arbitrage | Edge is reasoning depth, not speed |
+| Superforecaster persona prompts | Research shows they reduce accuracy (OSF 2025) |
+| DSPy/automated prompt optimization | Insufficient data (n<50), $20/day budget |
+| Cross-platform arbitrage | Paper trading only, can't execute real arb |
+| Complex ensemble (Bayesian, stacking) | n<50, hit-rate-weighted mean is correct level |
+| Active exit/sell trading | Fee math kills it (5.5c round-trip vs 2.8c hold) |
+| Multi-scenario expansion (non-Iran) | Prove edge on Iran first |
+| Real-time latency optimization | Edge is reasoning depth, not speed |
+| Full observability stack (OTel) | Overkill for single-analyst CLI tool |
+| 50-agent swarm | Replaced by focused prediction models |
+| Contract-first architecture | Deferred to v2.0, model registry sufficient for now |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TEL-01 | Phase 6 | Pending |
-| TEL-02 | Phase 6 | Pending |
-| TEL-03 | Phase 6 | Pending |
-| TEL-04 | Phase 7 | Pending |
-| SCORE-01 | Phase 6 | Pending |
-| SCORE-02 | Phase 7 | Pending |
-| SCORE-03 | Phase 7 | Pending |
-| SCORE-04 | Phase 7 | Pending |
-| SCORE-05 | Phase 7 | Pending |
-| SCORE-06 | Phase 7 | Pending |
-| SCORE-07 | Phase 7 | Pending |
-| ALERT-01 | Phase 8 | Pending |
-| ALERT-02 | Phase 8 | Pending |
-| ALERT-03 | Phase 8 | Pending |
-| ALERT-04 | Phase 8 | Pending |
-| EXP-01 | Phase 6 | Pending |
-| EXP-02 | Phase 9 | Pending |
-| EXP-03 | Phase 9 | Pending |
-| EXP-04 | Phase 9 | Pending |
-| EXP-05 | Phase 9 | Pending |
-| EXP-06 | Phase 9 | Pending |
+| PROMPT-01 | Phase 10 | Pending |
+| PROMPT-02 | Phase 10 | Pending |
+| PROMPT-03 | Phase 10 | Pending |
+| PROMPT-04 | Phase 10 | Pending |
+| PROMPT-05 | Phase 10 | Pending |
+| ARCH-04 | Phase 10 | Pending |
+| CTX-01 | Phase 11 | Pending |
+| CTX-02 | Phase 11 | Pending |
+| ARCH-01 | Phase 11 | Pending |
+| DISC-01 | Phase 12 | Pending |
+| DISC-02 | Phase 12 | Pending |
+| DISC-03 | Phase 12 | Pending |
+| DISC-04 | Phase 12 | Pending |
+| ARCH-03 | Phase 13 | Pending |
+| CTX-03 | Phase 13 | Pending |
+| CTX-04 | Phase 13 | Pending |
+| NEWS-01 | Phase 13 | Pending |
+| NEWS-02 | Phase 13 | Pending |
+| NEWS-03 | Phase 13 | Pending |
+| ARCH-02 | Phase 14 | Pending |
+| VALID-01 | Phase 14 | Pending |
+| VALID-02 | Phase 14 | Pending |
+| VALID-03 | Phase 14 | Pending |
+| ALIGN-01 | Phase 11 | Pending |
+| ALIGN-02 | Phase 11 | Pending |
+| ALIGN-03 | Phase 12 | Pending |
+| ALIGN-04 | Phase 14 | Pending |
 
 **Coverage:**
-- v1.3 requirements: 21 total
-- Mapped to phases: 21
+- v1.4 requirements: 25 total
+- Mapped to phases: 25/25
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-09*
-*Last updated: 2026-04-09 after roadmap creation (Phases 6-9)*
+*Last updated: 2026-04-15 — added ALIGN-01 through ALIGN-04 from independent thesis review*

@@ -80,97 +80,91 @@ class TestBuildTrackRecordWithData:
     """Test with resolved signal data."""
 
     def test_aggregate_stats_correct(self, conn):
-        """5 resolved signals, 3 correct -> '3/5 correct (60% hit rate)'."""
-        for i in range(5):
+        """12 resolved signals, 7 correct -> '7/12 correct (58% hit rate)'."""
+        for i in range(12):
             _insert_resolved_signal(
                 conn,
                 signal_id=f"sig-{i}",
                 model_id="oil_price",
                 contract_ticker=f"KXWTI-{i}",
                 model_probability=0.70,
-                resolution_price=1.0 if i < 3 else 0.0,
-                model_was_correct=i < 3,
+                resolution_price=1.0 if i < 7 else 0.0,
+                model_was_correct=i < 7,
                 signal="BUY_YES",
             )
         result = build_track_record("oil_price", conn)
-        assert "3/5 correct" in result
-        assert "60%" in result
+        assert "7/12 correct" in result
+        assert "58%" in result
 
     def test_last_three_signals_shown(self, conn):
         """Output includes last 3 resolved signals with ticker."""
-        for i in range(5):
+        for i in range(12):
             _insert_resolved_signal(
                 conn,
                 signal_id=f"sig-{i}",
                 model_id="oil_price",
                 contract_ticker=f"KXWTI-{i}",
                 model_probability=0.70,
-                resolution_price=1.0 if i < 3 else 0.0,
-                model_was_correct=i < 3,
+                resolution_price=1.0 if i < 7 else 0.0,
+                model_was_correct=i < 7,
                 signal="BUY_YES",
                 resolved_at=datetime(2026, 4, 1 + i, tzinfo=timezone.utc),
             )
         result = build_track_record("oil_price", conn)
-        # Last 3 by resolved_at DESC: sig-4, sig-3, sig-2
-        assert "KXWTI-4" in result
-        assert "KXWTI-3" in result
-        assert "KXWTI-2" in result
+        # Last 3 by resolved_at DESC: sig-11, sig-10, sig-9
+        assert "KXWTI-11" in result
+        assert "KXWTI-10" in result
+        assert "KXWTI-9" in result
 
     def test_correct_wrong_labels(self, conn):
         """Output shows CORRECT/WRONG labels."""
-        _insert_resolved_signal(
-            conn,
-            signal_id="sig-correct",
-            model_id="ceasefire",
-            contract_ticker="KXAGREE-1",
-            model_probability=0.80,
-            resolution_price=1.0,
-            model_was_correct=True,
-            signal="BUY_YES",
-        )
-        _insert_resolved_signal(
-            conn,
-            signal_id="sig-wrong",
-            model_id="ceasefire",
-            contract_ticker="KXAGREE-2",
-            model_probability=0.80,
-            resolution_price=0.0,
-            model_was_correct=False,
-            signal="BUY_YES",
-        )
+        for i in range(10):
+            _insert_resolved_signal(
+                conn,
+                signal_id=f"sig-cw-{i}",
+                model_id="ceasefire",
+                contract_ticker=f"KXAGREE-{i}",
+                model_probability=0.80,
+                resolution_price=1.0 if i < 8 else 0.0,
+                model_was_correct=i < 8,
+                signal="BUY_YES",
+                resolved_at=datetime(2026, 4, 1 + i, tzinfo=timezone.utc),
+            )
         result = build_track_record("ceasefire", conn)
         assert "CORRECT" in result
         assert "WRONG" in result
 
     def test_only_returns_specified_model(self, conn):
         """Per D-11: per-model only -- no cross-model stats."""
-        _insert_resolved_signal(
-            conn,
-            signal_id="sig-oil",
-            model_id="oil_price",
-            contract_ticker="KXWTI-1",
-            model_probability=0.70,
-            resolution_price=1.0,
-            model_was_correct=True,
-            signal="BUY_YES",
-        )
-        _insert_resolved_signal(
-            conn,
-            signal_id="sig-cease",
-            model_id="ceasefire",
-            contract_ticker="KXAGREE-1",
-            model_probability=0.60,
-            resolution_price=0.0,
-            model_was_correct=False,
-            signal="BUY_NO",
-        )
+        for i in range(10):
+            _insert_resolved_signal(
+                conn,
+                signal_id=f"sig-oil-{i}",
+                model_id="oil_price",
+                contract_ticker=f"KXWTI-{i}",
+                model_probability=0.70,
+                resolution_price=1.0 if i < 7 else 0.0,
+                model_was_correct=i < 7,
+                signal="BUY_YES",
+            )
+        for i in range(10):
+            _insert_resolved_signal(
+                conn,
+                signal_id=f"sig-cease-{i}",
+                model_id="ceasefire",
+                contract_ticker=f"KXAGREE-{i}",
+                model_probability=0.60,
+                resolution_price=0.0,
+                model_was_correct=False,
+                signal="BUY_NO",
+            )
         oil_result = build_track_record("oil_price", conn)
-        assert "KXWTI-1" in oil_result
-        assert "KXAGREE-1" not in oil_result
+        assert "7/10 correct" in oil_result
+        assert "KXAGREE" not in oil_result
 
         cease_result = build_track_record("ceasefire", conn)
-        assert "KXAGREE-1" in cease_result
-        assert "KXWTI-1" not in cease_result
+        assert "0/10 correct" in cease_result
+        assert "KXWTI" not in cease_result
 
     def test_output_under_1600_chars(self, conn):
         """Output should be under ~400 tokens (~1600 chars)."""
@@ -190,15 +184,55 @@ class TestBuildTrackRecordWithData:
 
     def test_signal_direction_shown(self, conn):
         """Output includes signal direction (BUY_YES/BUY_NO)."""
-        _insert_resolved_signal(
-            conn,
-            signal_id="sig-1",
-            model_id="oil_price",
-            contract_ticker="KXWTI-1",
-            model_probability=0.70,
-            resolution_price=1.0,
-            model_was_correct=True,
-            signal="BUY_YES",
-        )
+        for i in range(10):
+            _insert_resolved_signal(
+                conn,
+                signal_id=f"sig-dir-{i}",
+                model_id="oil_price",
+                contract_ticker=f"KXWTI-DIR-{i}",
+                model_probability=0.70,
+                resolution_price=1.0,
+                model_was_correct=True,
+                signal="BUY_YES",
+            )
         result = build_track_record("oil_price", conn)
         assert "BUY_YES" in result
+
+
+class TestBuildTrackRecordSmallSample:
+    """Test sample size guard for n<10."""
+
+    def test_fewer_than_10_returns_informational(self, conn):
+        """With 5 resolved signals, should return informational text without stats."""
+        for i in range(5):
+            _insert_resolved_signal(
+                conn,
+                signal_id=f"sig-small-{i}",
+                model_id="oil_price",
+                contract_ticker=f"KXWTI-SMALL-{i}",
+                model_probability=0.70,
+                resolution_price=1.0 if i < 3 else 0.0,
+                model_was_correct=i < 3,
+                signal="BUY_YES",
+            )
+        result = build_track_record("oil_price", conn)
+        assert "too few" in result
+        assert "minimum 10" in result
+        assert "hit rate" not in result.lower()
+
+    def test_exactly_10_returns_full_stats(self, conn):
+        """With exactly 10 resolved signals, should return full statistics."""
+        for i in range(10):
+            _insert_resolved_signal(
+                conn,
+                signal_id=f"sig-ten-{i}",
+                model_id="oil_price",
+                contract_ticker=f"KXWTI-TEN-{i}",
+                model_probability=0.70,
+                resolution_price=1.0 if i < 7 else 0.0,
+                model_was_correct=i < 7,
+                signal="BUY_YES",
+            )
+        result = build_track_record("oil_price", conn)
+        assert "7/10 correct" in result
+        assert "70%" in result

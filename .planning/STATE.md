@@ -1,42 +1,41 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: Daily Feedback Loop + Scorecard
-status: ready_to_plan
-stopped_at: null
-last_updated: "2026-04-09"
-last_activity: 2026-04-09
+milestone: v1.4
+milestone_name: Model Intelligence + Resolution Validation
+status: executing
+last_updated: "2026-04-15T20:33:36.359Z"
+last_activity: 2026-04-15 -- Phase 10.1 execution started
 progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 7
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 3
+  percent: 60
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-09)
+See: .planning/PROJECT.md (updated 2026-04-12)
 
 **Core value:** Find mispriced prediction market contracts on Iran war outcomes by reasoning about second-order cascade effects.
-**Current focus:** Phase 6 - Telemetry Foundation
+**Current focus:** Phase 10.1 — multi-call-claude-ensemble
 
 ## Current Position
 
-Phase: 6 of 9 (Telemetry Foundation) — first phase of v1.3
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-04-09 — Roadmap created for v1.3 milestone (Phases 6-9)
+Phase: 10.1 (multi-call-claude-ensemble) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 10.1
+Last activity: 2026-04-15 -- Phase 10.1 execution started
 
-Progress: [░░░░░░░░░░] 0% (v1.3 scope)
+Progress: [░░░░░░░░░░] 0% (v1.4 scope)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0 (v1.3)
+- Total plans completed: 3 (v1.4)
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -46,10 +45,13 @@ Progress: [░░░░░░░░░░] 0% (v1.3 scope)
 
 ### Decisions
 
-- v1.2 Phases 4-5 deferred: Deployment Fixes not critical for CLI-first, Second Thesis blocked on proving edge
-- Daily feedback loop is the priority: run-level telemetry, scorecard ETL, alerting, experiment framework
-- Phase 6 groups parallelizable schema+wiring tasks; Phases 7-9 build sequentially on that foundation
-- GitHub issues #19-#23 track Sprint A work items
+- v1.3 deprioritized for v1.4: Model intelligence has higher ROI than telemetry at current data sparsity
+- Hybrid model architecture: specialized models + generic political model + model registry. Contract-first deferred to v2.0.
+- Prompt audit found: market price anchoring, Hormuz spec mismatch, bypass_flow=0, hypothesis injection, no sample size guard
+- Crisis context gap: Aug 2025 - Feb 2026 has only 3 bullet points for 6 months of escalation
+- Research says anchoring removal is highest ROI fix, can ship immediately
+- Split-brain aggregation must be unified before backtest validation is meaningful
+- Only 1 new dep needed (feedparser), 6 dead deps to remove
 
 ### Pending Todos
 
@@ -57,10 +59,10 @@ None yet.
 
 ### Blockers/Concerns
 
-- Ceasefire window: 2 weeks from April 7 — must have feedback loop running before it expires
-- Signal integrity modules (cost model, Kelly sizing, allocator) built but not wired into brief.py yet
+- Ceasefire window: ~9 days remaining (Apr 21 deadline)
 - Low sample sizes for statistical tests — event markets resolve slowly
-- Safe auto-actions only (tighten gates, never loosen without human review)
+- Kalshi API may not expose historical daily prices for resolved contracts
+- crisis_context.py must be manually updated as events unfold
 
 ### Quick Tasks Completed
 

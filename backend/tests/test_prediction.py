@@ -141,7 +141,7 @@ class TestOilPricePredictor:
         await predictor.predict(SAMPLE_EVENTS, SAMPLE_PRICES, world_state)
 
         stats = budget.stats()
-        assert stats["call_count"] == 1
+        assert stats["call_count"] == 3  # ensemble makes 3 calls
         assert stats["spend_today_usd"] > 0
 
     async def test_empty_events(self, cascade, budget, world_state):
@@ -156,6 +156,26 @@ class TestOilPricePredictor:
         predictor = OilPricePredictor(cascade, budget, mock_client)
         result = await predictor.predict([], SAMPLE_PRICES, world_state)
         assert result.probability == 0.4
+
+    async def test_worldstate_not_mutated(self, cascade, budget):
+        """BUG-01: oil predictor must not mutate the shared WorldState."""
+        mock_client = make_mock_client({
+            "probability": 0.65,
+            "direction": "increase",
+            "magnitude_range": [2.0, 6.0],
+            "reasoning": "Test mutation safety.",
+            "evidence": ["test"],
+        })
+        predictor = OilPricePredictor(cascade, budget, mock_client)
+        ws = WorldState()
+        ws.update_cell(612345678, flow=5_000_000, status="blocked", threat_level=0.9)
+
+        original_snapshot = ws.snapshot()
+        await predictor.predict(SAMPLE_EVENTS, SAMPLE_PRICES, ws)
+        after_snapshot = ws.snapshot()
+
+        # WorldState must be unchanged after prediction
+        assert original_snapshot == after_snapshot
 
     async def test_missing_prices_uses_fallback(self, cascade, budget, world_state):
         mock_client = make_mock_client({
@@ -270,3 +290,42 @@ class TestHormuzReopeningPredictor:
         predictor = HormuzReopeningPredictor(cascade, budget, mock_client)
         result = await predictor.predict([], ws)
         assert result.probability == 0.5
+
+
+class TestBypassFlowComputation:
+    """Test that oil price model gets non-zero bypass_flow from cascade engine."""
+
+    def test_cascade_activate_bypass_positive(self, config):
+        """activate_bypass returns positive bypass_flow when supply_loss > 0."""
+        cascade = CascadeEngine(config=config)
+        result = cascade.activate_bypass(1_000_000)  # 1M bbl/day loss
+        assert result["bypass_flow"] > 0
+        assert result["bypass_flow"] >= config.total_bypass_capacity_min
+        assert result["bypass_flow"] <= config.total_bypass_capacity_max
+
+    def test_cascade_activate_bypass_zero_loss(self, config):
+        """activate_bypass returns 0 when no supply loss."""
+        cascade = CascadeEngine(config=config)
+        result = cascade.activate_bypass(0)
+        assert result["bypass_flow"] == 0.0
+
+    async def test_oil_predictor_uses_bypass_flow(self, cascade, budget):
+        """Oil predictor calls activate_bypass and gets non-zero bypass_flow with blocked cells."""
+        mock_client = make_mock_client({
+            "probability": 0.75,
+            "confidence": 0.7,
+            "direction": "increase",
+            "magnitude_range": [5.0, 15.0],
+            "reasoning": "Test bypass flow",
+            "evidence": ["test"],
+        })
+        predictor = OilPricePredictor(cascade, budget, mock_client)
+
+        ws = WorldState()
+        ws.update_cell(cell_id=1, flow=2_000_000, status="blocked", threat_level=0.9)
+
+        prices = [{"series-id": "RBRTE", "value": 98.0, "period": "2026-04-12"}]
+        events = [{"title": "Test event", "published_at": "2026-04-12", "snippet": "test"}]
+
+        result = await predictor.predict(events, prices, ws)
+        assert isinstance(result, PredictionOutput)
