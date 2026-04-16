@@ -35,5 +35,16 @@ npm-debug.log*
 *.duckdb
 *.duckdb.wal
 
+# Data
+backend/data/
+
+# Playwright
+.playwright-mcp/
+test-results/
+
+# Claude Code
+.claude/
+
 # Misc
 *.log
+*.pem

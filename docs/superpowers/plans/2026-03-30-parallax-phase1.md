@@ -2778,7 +2778,7 @@ def test_verify_invite_code_invalid():
 
 def test_admin_password_grants_admin():
     app = FastAPI()
-    auth = AuthMiddleware(admin_password="secret123", invite_seed="seed")
+    auth = AuthMiddleware(admin_password="test-password", invite_seed="seed")
 
     @app.get("/admin/test")
     async def admin_route():
@@ -2787,7 +2787,7 @@ def test_admin_password_grants_admin():
     app.middleware("http")(auth)
     client = TestClient(app)
 
-    resp = client.get("/admin/test", headers={"X-Admin-Password": "secret123"})
+    resp = client.get("/admin/test", headers={"X-Admin-Password": "test-password"})
     assert resp.status_code == 200
 ```
 
