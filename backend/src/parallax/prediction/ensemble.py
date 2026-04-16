@@ -83,7 +83,7 @@ async def ensemble_predict(
 
     Args:
         client: AsyncAnthropic client instance.
-        model: Model name (e.g. "claude-sonnet-4-20250514").
+        model: Model name (e.g. "claude-opus-4-20250514").
         prompt: The user prompt to send to each call.
         budget: BudgetTracker instance for recording token usage.
         max_tokens: Max tokens per call.
@@ -119,7 +119,7 @@ async def ensemble_predict(
             continue
 
         # Record budget for each individual call
-        budget.record(resp.usage.input_tokens, resp.usage.output_tokens, "sonnet")
+        budget.record(resp.usage.input_tokens, resp.usage.output_tokens, "opus")
 
         try:
             parsed = parse_llm_json(resp.content[0].text)

@@ -105,7 +105,7 @@ class HormuzReopeningPredictor:
 
         result = await ensemble_predict(
             client=self._client,
-            model="claude-sonnet-4-20250514",
+            model="claude-opus-4-20250514",
             prompt=prompt,
             budget=self._budget,
             max_tokens=2000,
