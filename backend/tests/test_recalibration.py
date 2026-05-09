@@ -29,8 +29,14 @@ def _insert_signal(
     model_was_correct: bool | None = True,
     realized_pnl: float | None = None,
     proxy_class: str = "DIRECT",
+    resolution_price: float | None = 1.0,
 ) -> None:
-    """Insert a minimal signal_ledger row for testing."""
+    """Insert a minimal signal_ledger row for testing.
+
+    ``resolution_price`` defaults to 1.0 so the row enters the
+    ``signal_quality_evaluation`` view (which filters on
+    ``resolution_price IS NOT NULL``).
+    """
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """
@@ -38,14 +44,14 @@ def _insert_signal(
         (signal_id, created_at, model_id, model_claim, model_probability,
          model_timeframe, contract_ticker, proxy_class, confidence_discount,
          market_yes_price, market_no_price, raw_edge, effective_edge,
-         signal, model_was_correct, realized_pnl)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         signal, model_was_correct, realized_pnl, resolution_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             signal_id, now, model_id, "test claim", model_probability,
             "7d", "KXTEST-01", proxy_class, 1.0,
             0.50, 0.50, effective_edge, effective_edge,
-            signal, model_was_correct, realized_pnl,
+            signal, model_was_correct, realized_pnl, resolution_price,
         ],
     )
 

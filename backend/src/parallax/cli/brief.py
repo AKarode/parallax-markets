@@ -21,6 +21,7 @@ from parallax.db.schema import create_tables
 from parallax.markets.kalshi import IRAN_EVENT_TICKERS, KalshiClient
 from parallax.markets.polymarket import PolymarketClient
 from parallax.markets.schemas import MarketPrice
+from parallax.ops.alerts import AlertDispatcher, build_alert_dispatcher
 from parallax.prediction.ceasefire import CeasefirePredictor
 from parallax.prediction.hormuz import HormuzReopeningPredictor
 from parallax.prediction.oil_price import OilPricePredictor
@@ -39,6 +40,85 @@ from parallax.simulation.world_state import WorldState
 logger = logging.getLogger(__name__)
 
 SCENARIO_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent / "config" / "scenario_hormuz.yaml"
+
+DEFAULT_FALLBACK_MAX_AGE_HOURS = 6.0
+
+
+async def _get_fallback_prediction(
+    conn: duckdb.DuckDBPyConnection,
+    model_id: str,
+    *,
+    max_age_hours: float = DEFAULT_FALLBACK_MAX_AGE_HOURS,
+    alerts: AlertDispatcher | None = None,
+) -> PredictionOutput | None:
+    """Retrieve the most recent non-fallback prediction for a model.
+
+    Filters out previous fallback rows so a chain of failures cannot
+    produce a recursive fallback-of-a-fallback. Refuses (returns None +
+    emits alert) if the candidate is older than ``max_age_hours``. The
+    returned ``PredictionOutput`` carries the original ``created_at`` and
+    a ``fallback_source_run_id`` so persistence can preserve provenance.
+    """
+    row = conn.execute(
+        """
+        SELECT probability, direction, confidence, reasoning, timeframe,
+               created_at, run_id
+        FROM prediction_log
+        WHERE model_id = ?
+          AND data_environment != 'dry_run'
+          AND COALESCE(is_fallback, false) = false
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        [model_id],
+    ).fetchone()
+    if row is None:
+        return None
+
+    original_created_at = row[5]
+    if original_created_at is not None and original_created_at.tzinfo is None:
+        original_created_at = original_created_at.replace(tzinfo=timezone.utc)
+    source_run_id = row[6]
+
+    if original_created_at is not None:
+        age_hours = (datetime.now(timezone.utc) - original_created_at).total_seconds() / 3600.0
+        if age_hours > max_age_hours:
+            logger.warning(
+                "Fallback for %s refused: %.1fh old > %.1fh max",
+                model_id, age_hours, max_age_hours,
+            )
+            if alerts is not None:
+                await alerts.emit(
+                    event_type="fallback_too_old",
+                    severity="warning",
+                    message=(
+                        f"Refused fallback for {model_id}: candidate is "
+                        f"{age_hours:.1f}h old (max {max_age_hours:.1f}h)"
+                    ),
+                    details={
+                        "model_id": model_id,
+                        "age_hours": age_hours,
+                        "max_age_hours": max_age_hours,
+                        "source_run_id": source_run_id,
+                    },
+                )
+            return None
+
+    return PredictionOutput(
+        model_id=model_id,
+        prediction_type=f"{model_id}_fallback",
+        probability=float(row[0]),
+        direction=row[1] or "stable",
+        magnitude_range=[0.0, 1.0],
+        unit="probability",
+        timeframe=row[4] or "14d",
+        confidence=float(row[2]) if row[2] else 0.5,
+        reasoning=f"[FALLBACK from run {source_run_id}] {row[3] or 'Previous run prediction'}",
+        evidence=["Fallback from previous run due to predictor failure"],
+        created_at=original_created_at or datetime.now(timezone.utc),
+        is_fallback=True,
+        fallback_source_run_id=source_run_id,
+    )
 
 
 def _persist_run_start(
@@ -103,12 +183,12 @@ def _make_dry_run_predictions() -> list[PredictionOutput]:
         PredictionOutput(
             model_id="ceasefire",
             prediction_type="ceasefire_probability",
-            probability=0.62,
+            probability=0.78,
             direction="stable",
             magnitude_range=[0.0, 1.0],
             unit="probability",
             timeframe="14d",
-            confidence=0.62,
+            confidence=0.85,
             reasoning="Oman-mediated talks are improving dialogue but military posture remains tense.",
             evidence=["Oman mediation active", "US-Iran indirect talks confirmed"],
             created_at=now,
@@ -481,23 +561,63 @@ async def run_brief(
             flow=2_000_000,
             status="blocked",
         )
-        events, prices, kalshi_markets, poly_markets = await asyncio.gather(
+        fetch_results = await asyncio.gather(
             _fetch_gdelt_events(),
             _fetch_oil_prices(),
             _fetch_kalshi_markets(),
             _fetch_polymarket_markets(),
+            return_exceptions=True,
         )
+        events = fetch_results[0] if not isinstance(fetch_results[0], Exception) else []
+        prices = fetch_results[1] if not isinstance(fetch_results[1], Exception) else []
+        kalshi_markets = fetch_results[2] if not isinstance(fetch_results[2], Exception) else []
+        poly_markets = fetch_results[3] if not isinstance(fetch_results[3], Exception) else []
+        for i, result in enumerate(fetch_results):
+            if isinstance(result, Exception):
+                logger.error("Data fetch %d failed: %s", i, result)
         market_prices = kalshi_markets + poly_markets
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
-        predictions = list(
-            await asyncio.gather(
-                oil_pred.predict(events, prices, world_state, db_conn=conn),
-                ceasefire_pred.predict(events, db_conn=conn),
-                hormuz_pred.predict(events, world_state, db_conn=conn),
-            ),
+        prediction_results = await asyncio.gather(
+            oil_pred.predict(events, prices, world_state, db_conn=conn),
+            ceasefire_pred.predict(events, db_conn=conn),
+            hormuz_pred.predict(events, world_state, db_conn=conn),
+            return_exceptions=True,
         )
+        model_ids = ["oil_price", "ceasefire", "hormuz_reopening"]
+        predictions = []
+        alerts = build_alert_dispatcher(db_conn=conn, run_id=run_id)
+        for i, result in enumerate(prediction_results):
+            if isinstance(result, Exception):
+                logger.error("Predictor %s failed: %s", model_ids[i], result)
+                fallback = await _get_fallback_prediction(conn, model_ids[i], alerts=alerts)
+                if fallback:
+                    predictions.append(fallback)
+                    logger.info(
+                        "Using fallback prediction for %s from run %s",
+                        model_ids[i], fallback.fallback_source_run_id,
+                    )
+                else:
+                    logger.warning(
+                        "Predictor %s failed and no usable fallback available; dropping",
+                        model_ids[i],
+                    )
+                    await alerts.emit(
+                        event_type="predictor_dropped",
+                        severity="error",
+                        message=(
+                            f"Predictor {model_ids[i]} failed and no usable fallback "
+                            "available; dropped from run"
+                        ),
+                        details={
+                            "model_id": model_ids[i],
+                            "exception": repr(result),
+                            "run_id": run_id,
+                        },
+                    )
+            else:
+                predictions.append(result)
 
     _persist_market_prices(conn, market_prices)
     registry = ContractRegistry(conn)

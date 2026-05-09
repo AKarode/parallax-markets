@@ -72,12 +72,30 @@ def compute_ensemble(probabilities: list[float]) -> dict:
     }
 
 
+def apply_context_staleness_penalty(
+    confidence: float,
+    context_age_hours: float | None,
+) -> float:
+    """Multiply confidence by the staleness penalty when context_age_hours > 24.
+
+    Penalty schedule: 1.0 at 0-24h, linear decay to 0.0 at 72h, floor at 0.0.
+    Returns the (possibly reduced) confidence; if age is None or <= 24, returns
+    the original confidence unchanged.
+    """
+    if context_age_hours is None or context_age_hours <= 24:
+        return confidence
+    penalty = 1.0 - (context_age_hours - 24) / 48
+    penalty = max(0.0, min(1.0, penalty))
+    return confidence * penalty
+
+
 async def ensemble_predict(
     client: Any,
     model: str,
     prompt: str,
     budget: Any,
     max_tokens: int = 2000,
+    context_age_hours: float | None = None,
 ) -> dict:
     """Make 3 concurrent Claude calls at different temperatures and aggregate.
 
@@ -87,6 +105,9 @@ async def ensemble_predict(
         prompt: The user prompt to send to each call.
         budget: BudgetTracker instance for recording token usage.
         max_tokens: Max tokens per call.
+        context_age_hours: Age of crisis context in hours. If > 24, the parsed
+            response confidence is downscaled by the staleness penalty so stale
+            predictions cannot masquerade as confident.
 
     Returns:
         Dict with keys: ensemble, parsed, all_parsed, call_count.
@@ -142,9 +163,26 @@ async def ensemble_predict(
         key=lambda p: abs(p.get("probability", 0) - ensemble_prob),
     )
 
+    if context_age_hours is not None and context_age_hours > 24:
+        original_confidence = float(median_parsed.get("confidence", 1.0))
+        adjusted_confidence = apply_context_staleness_penalty(
+            original_confidence, context_age_hours,
+        )
+        if adjusted_confidence != original_confidence:
+            logger.info(
+                "Crisis context stale (age=%.1fh): confidence %.2f -> %.2f",
+                context_age_hours,
+                original_confidence,
+                adjusted_confidence,
+            )
+            median_parsed["confidence"] = adjusted_confidence
+            median_parsed["context_age_hours"] = context_age_hours
+            median_parsed["staleness_penalty_applied"] = True
+
     return {
         "ensemble": ensemble_result,
         "parsed": median_parsed,
         "all_parsed": all_parsed,
         "call_count": len(all_parsed),
+        "context_age_hours": context_age_hours,
     }

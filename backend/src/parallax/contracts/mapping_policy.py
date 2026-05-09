@@ -29,6 +29,12 @@ class MappingPolicy:
 
     DEFAULT_OIL_MOVE_SCALE_USD = 8.0
 
+    COLD_START_EDGE_FLOORS: dict[str, float] = {
+        "loose_proxy": 0.08,
+        "near_proxy": 0.06,
+        "direct": 0.04,
+    }
+
     def __init__(
         self,
         registry: ContractRegistry,
@@ -38,7 +44,7 @@ class MappingPolicy:
     ) -> None:
         self._registry = registry
         self._min_edge = min_effective_edge_pct / 100.0
-        self._per_class_min_edge: dict[str, float] = {}
+        self._per_class_min_edge: dict[str, float] = dict(self.COLD_START_EDGE_FLOORS)
         self._default_cost_inputs = default_cost_inputs or MappingCostInputs()
         self._default_staleness_policy = (
             default_staleness_policy or MarketStalenessPolicy()
@@ -58,7 +64,7 @@ class MappingPolicy:
         results: list[MappingResult] = []
         evaluation_time = evaluated_at or datetime.now(timezone.utc)
 
-        for contract, proxy_class, _legacy_discount, invert in candidates:
+        for contract, proxy_class, confidence_discount, invert in candidates:
             market = market_by_ticker.get(contract.ticker)
             if market is None:
                 logger.debug("No market price for %s, skipping", contract.ticker)
@@ -96,6 +102,7 @@ class MappingPolicy:
                         quote_timestamp=quote_timestamp,
                         quote_age_seconds=quote_age_seconds,
                         staleness_threshold_seconds=resolved_staleness.max_quote_age_seconds,
+                        confidence_discount=confidence_discount,
                         reason=(
                             "Rejected: no explicit contract-native fair-value estimator "
                             f"for {prediction.model_id} -> {contract_family.value}"
@@ -117,6 +124,7 @@ class MappingPolicy:
                         quote_timestamp=None,
                         quote_age_seconds=None,
                         staleness_threshold_seconds=resolved_staleness.max_quote_age_seconds,
+                        confidence_discount=confidence_discount,
                         reason="Rejected: market quote has no usable timestamp",
                     ),
                 )
@@ -137,6 +145,7 @@ class MappingPolicy:
                         quote_timestamp=quote_timestamp,
                         quote_age_seconds=quote_age_seconds,
                         staleness_threshold_seconds=resolved_staleness.max_quote_age_seconds,
+                        confidence_discount=confidence_discount,
                         reason=(
                             f"Rejected: quote stale at {quote_age_seconds:.0f}s "
                             f"(threshold {resolved_staleness.max_quote_age_seconds:.0f}s)"
@@ -171,6 +180,7 @@ class MappingPolicy:
                 yes_spread=market.yes_bid_ask_spread,
                 no_spread=market.no_bid_ask_spread,
                 costs=resolved_costs,
+                confidence_discount=confidence_discount,
             )
             results.append(result)
 
@@ -203,6 +213,7 @@ class MappingPolicy:
         yes_spread: float | None,
         no_spread: float | None,
         costs: MappingCostInputs,
+        confidence_discount: float = 1.0,
     ) -> MappingResult:
         if buy_yes_edge is None and buy_no_edge is None:
             return self._build_non_tradable_result(
@@ -216,6 +227,7 @@ class MappingPolicy:
                 quote_timestamp=quote_timestamp,
                 quote_age_seconds=quote_age_seconds,
                 staleness_threshold_seconds=staleness_threshold_seconds,
+                confidence_discount=confidence_discount,
                 reason="Rejected: no executable YES or NO ask available",
             )
 
@@ -242,7 +254,8 @@ class MappingPolicy:
         expected_slippage_rate = costs.slippage_for_spread(observed_spread)
         expected_total_cost = costs.total_cost_for_spread(observed_spread)
         net_edge = chosen_edge - expected_total_cost
-        should_trade = chosen_edge > expected_total_cost and net_edge >= min_edge
+        effective_edge = net_edge * confidence_discount
+        should_trade = chosen_edge > expected_total_cost and effective_edge >= min_edge
 
         if chosen_side == "yes":
             entry_price_kind = "best_yes_ask"
@@ -256,7 +269,8 @@ class MappingPolicy:
             reason = (
                 f"{contract_family.value} via {estimator_name}: {chosen_side.upper()} "
                 f"gross edge {chosen_edge:.1%}, costs {expected_total_cost:.1%}, "
-                f"net edge {net_edge:.1%}"
+                f"net edge {net_edge:.1%}, discount {confidence_discount:.0%}, "
+                f"effective edge {effective_edge:.1%}"
             )
         elif chosen_edge <= expected_total_cost:
             tradeability_status = "cost_blocked"
@@ -267,7 +281,8 @@ class MappingPolicy:
         else:
             tradeability_status = "edge_blocked"
             reason = (
-                f"Rejected: post-cost {chosen_side.upper()} net edge {net_edge:.1%} "
+                f"Rejected: post-cost {chosen_side.upper()} effective edge {effective_edge:.1%} "
+                f"(net {net_edge:.1%} * discount {confidence_discount:.0%}) "
                 f"below {min_edge:.1%} threshold"
             )
 
@@ -287,12 +302,12 @@ class MappingPolicy:
             buy_no_edge=buy_no_edge,
             gross_edge=chosen_edge,
             raw_edge=chosen_edge,
-            confidence_discount=1.0,
+            confidence_discount=confidence_discount,
             expected_fee_rate=costs.expected_fee_rate,
             expected_slippage_rate=expected_slippage_rate,
             expected_total_cost=expected_total_cost,
             net_edge=net_edge,
-            effective_edge=net_edge,
+            effective_edge=effective_edge,
             entry_side=chosen_side,
             entry_price=entry_price,
             entry_price_kind=entry_price_kind,
@@ -316,6 +331,7 @@ class MappingPolicy:
         quote_age_seconds: float | None,
         staleness_threshold_seconds: float | None,
         reason: str,
+        confidence_discount: float = 1.0,
     ) -> MappingResult:
         return MappingResult(
             prediction_model_id=prediction_model_id,
@@ -337,7 +353,7 @@ class MappingPolicy:
             buy_no_edge=None,
             gross_edge=None,
             raw_edge=None,
-            confidence_discount=1.0,
+            confidence_discount=confidence_discount,
             expected_fee_rate=None,
             expected_slippage_rate=None,
             expected_total_cost=None,
@@ -495,6 +511,19 @@ class MappingPolicy:
                     "direction": prediction.direction,
                     "magnitude_range": prediction.magnitude_range,
                 },
+            )
+
+        if proxy_class in (ProxyClass.LOOSE_PROXY, ProxyClass.NEAR_PROXY):
+            fair_yes = self._confidence_shrunk_probability(
+                1.0 - prediction.probability if invert else prediction.probability,
+                prediction.confidence,
+            )
+            return FairValueEstimate(
+                estimator_name="generic_proxy_probability",
+                contract_family=contract_family,
+                fair_value_yes=fair_yes,
+                fair_value_no=1.0 - fair_yes,
+                inputs={"invert_probability": invert, "proxy_class": proxy_class.value},
             )
 
         return None

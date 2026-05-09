@@ -36,6 +36,8 @@ class PredictionLogEntry(BaseModel):
     news_context: list[dict]
     cascade_inputs: dict | None = None
     created_at: datetime
+    is_fallback: bool = False
+    fallback_source_run_id: str | None = None
 
 
 class PredictionLogger:
@@ -80,6 +82,8 @@ class PredictionLogger:
             news_context=news_context,
             cascade_inputs=cascade_inputs,
             created_at=prediction.created_at,
+            is_fallback=getattr(prediction, "is_fallback", False),
+            fallback_source_run_id=getattr(prediction, "fallback_source_run_id", None),
         )
 
         self._conn.execute(
@@ -87,8 +91,8 @@ class PredictionLogger:
             INSERT INTO prediction_log
             (log_id, run_id, data_environment, model_id, probability, direction, confidence,
              reasoning, evidence, timeframe, news_context, cascade_inputs,
-             created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, is_fallback, fallback_source_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 entry.log_id,
@@ -104,6 +108,8 @@ class PredictionLogger:
                 json.dumps(entry.news_context),
                 json.dumps(entry.cascade_inputs) if entry.cascade_inputs is not None else None,
                 entry.created_at.isoformat(),
+                entry.is_fallback,
+                entry.fallback_source_run_id,
             ],
         )
 

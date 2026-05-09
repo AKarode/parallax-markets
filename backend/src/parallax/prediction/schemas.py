@@ -26,6 +26,8 @@ class PredictionOutput(BaseModel):
     ensemble_probabilities: list[float] | None = None
     ensemble_std_dev: float | None = None
     ensemble_is_unstable: bool = False
+    is_fallback: bool = False
+    fallback_source_run_id: str | None = None
 
     @field_validator("probability", "confidence")
     @classmethod

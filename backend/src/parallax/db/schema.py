@@ -254,7 +254,9 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             cascade_inputs JSON,
             created_at TIMESTAMP NOT NULL,
             experiment_id TEXT,
-            variant TEXT
+            variant TEXT,
+            is_fallback BOOLEAN NOT NULL DEFAULT false,
+            fallback_source_run_id TEXT
         )
     """)
 
@@ -475,12 +477,58 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS crisis_events (
+            id TEXT PRIMARY KEY,
+            event_time TIMESTAMPTZ NOT NULL,
+            headline TEXT NOT NULL,
+            source TEXT NOT NULL,
+            category TEXT,
+            url TEXT,
+            headline_hash TEXT,
+            inserted_at TIMESTAMPTZ DEFAULT current_timestamp
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_runs (
+            backtest_id TEXT PRIMARY KEY,
+            started_at TIMESTAMPTZ NOT NULL,
+            ended_at TIMESTAMPTZ,
+            date_range_start DATE NOT NULL,
+            date_range_end DATE NOT NULL,
+            config_hash TEXT,
+            contract_list JSON,
+            status TEXT NOT NULL DEFAULT 'running',
+            error TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS backtest_predictions (
+            prediction_id TEXT PRIMARY KEY,
+            backtest_id TEXT NOT NULL,
+            sim_date DATE NOT NULL,
+            model_id TEXT NOT NULL,
+            contract_ticker TEXT NOT NULL,
+            predicted_probability DOUBLE NOT NULL,
+            predicted_direction TEXT,
+            resolution_price DOUBLE,
+            resolution_date DATE,
+            edge_predicted DOUBLE,
+            edge_realized DOUBLE,
+            was_correct BOOLEAN
+        )
+    """)
+
 
 def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
     if _table_exists(conn, "prediction_log"):
         _add_column_if_missing(conn, "prediction_log", "data_environment", "VARCHAR DEFAULT 'live'")
         _add_column_if_missing(conn, "prediction_log", "experiment_id", "TEXT")
         _add_column_if_missing(conn, "prediction_log", "variant", "TEXT")
+        _add_column_if_missing(conn, "prediction_log", "is_fallback", "BOOLEAN DEFAULT false")
+        _add_column_if_missing(conn, "prediction_log", "fallback_source_run_id", "TEXT")
 
     if _table_exists(conn, "market_prices"):
         _add_column_if_missing(conn, "market_prices", "data_environment", "VARCHAR DEFAULT 'live'")

@@ -29,7 +29,7 @@ INITIAL_CONTRACTS = [
             "hormuz_reopening": ProxyClass.LOOSE_PROXY,
             "oil_price": ProxyClass.NONE,
         },
-        discount_map={"direct": 1.0, "near_proxy": 0.6, "loose_proxy": 0.3, "none": 0.0},
+        discount_map={"direct": 1.0, "near_proxy": 0.65, "loose_proxy": 0.3, "none": 0.0},
         invert_probability={"ceasefire": False, "hormuz_reopening": False, "oil_price": False},
     ),
     ContractRecord(
@@ -43,7 +43,7 @@ INITIAL_CONTRACTS = [
             "oil_price": ProxyClass.NEAR_PROXY,
             "ceasefire": ProxyClass.LOOSE_PROXY,
         },
-        discount_map={"direct": 1.0, "near_proxy": 0.6, "loose_proxy": 0.3, "none": 0.0},
+        discount_map={"direct": 1.0, "near_proxy": 0.65, "loose_proxy": 0.3, "none": 0.0},
         invert_probability={"hormuz_reopening": True, "oil_price": False, "ceasefire": False},
     ),
     ContractRecord(
@@ -57,7 +57,7 @@ INITIAL_CONTRACTS = [
             "hormuz_reopening": ProxyClass.LOOSE_PROXY,
             "ceasefire": ProxyClass.NONE,
         },
-        discount_map={"direct": 1.0, "near_proxy": 0.6, "loose_proxy": 0.3, "none": 0.0},
+        discount_map={"direct": 1.0, "near_proxy": 0.65, "loose_proxy": 0.3, "none": 0.0},
         invert_probability={"oil_price": False, "hormuz_reopening": False, "ceasefire": False},
     ),
     ContractRecord(
@@ -71,7 +71,7 @@ INITIAL_CONTRACTS = [
             "hormuz_reopening": ProxyClass.LOOSE_PROXY,
             "ceasefire": ProxyClass.NONE,
         },
-        discount_map={"direct": 1.0, "near_proxy": 0.6, "loose_proxy": 0.3, "none": 0.0},
+        discount_map={"direct": 1.0, "near_proxy": 0.65, "loose_proxy": 0.3, "none": 0.0},
         invert_probability={"oil_price": False, "hormuz_reopening": False, "ceasefire": False},
     ),
 ]
@@ -241,7 +241,7 @@ class ContractRegistry:
 
         proxy_map: dict[str, ProxyClass] = {}
         discount_map: dict[str, float] = {
-            "direct": 1.0, "near_proxy": 0.6, "loose_proxy": 0.3, "none": 0.0,
+            "direct": 1.0, "near_proxy": 0.65, "loose_proxy": 0.3, "none": 0.0,
         }
         invert_map: dict[str, bool] = {}
 

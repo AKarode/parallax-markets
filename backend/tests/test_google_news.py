@@ -156,7 +156,7 @@ class TestFetchGoogleNews:
         with patch("parallax.ingestion.google_news.httpx.AsyncClient", return_value=mock_client):
             events = await fetch_google_news(
                 queries=["iran ceasefire", "iran oil"],
-                max_age_hours=24 * 30,  # wide window to include all test articles
+                max_age_hours=24 * 365,  # wide window to include all test articles
             )
 
         # article1 appears in both feeds but should only appear once

@@ -166,4 +166,5 @@ class TestPredictionLogTable:
             "confidence", "reasoning", "evidence", "timeframe",
             "news_context", "cascade_inputs", "created_at",
             "experiment_id", "variant",
+            "is_fallback", "fallback_source_run_id",
         ]

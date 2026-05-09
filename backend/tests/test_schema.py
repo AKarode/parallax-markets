@@ -31,6 +31,9 @@ def test_create_tables_creates_all_expected_tables(db):
         "daily_scorecard",
         "llm_usage",
         "ops_events",
+        "crisis_events",
+        "backtest_runs",
+        "backtest_predictions",
     }
     assert expected == table_names
 

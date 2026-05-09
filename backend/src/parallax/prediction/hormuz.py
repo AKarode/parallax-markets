@@ -91,10 +91,11 @@ class HormuzReopeningPredictor:
         recovery_100 = self._estimate_recovery(world_state, 1.00)
 
         # Step 3: LLM call
-        from parallax.prediction.crisis_context import get_crisis_context
+        from parallax.prediction.crisis_context import get_crisis_context_with_metadata
 
+        crisis = get_crisis_context_with_metadata(db_conn)
         events_summary = self._format_events(recent_events[:10])
-        prompt = get_crisis_context() + "\n\n" + HORMUZ_SYSTEM_PROMPT.format(
+        prompt = crisis.context + "\n\n" + HORMUZ_SYSTEM_PROMPT.format(
             flow_data=flow_data,
             recovery_25=recovery_25,
             recovery_50=recovery_50,
@@ -109,6 +110,7 @@ class HormuzReopeningPredictor:
             prompt=prompt,
             budget=self._budget,
             max_tokens=2000,
+            context_age_hours=crisis.context_age_hours,
         )
         ensemble = result["ensemble"]
         parsed = result["parsed"]
