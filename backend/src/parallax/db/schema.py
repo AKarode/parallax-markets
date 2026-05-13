@@ -488,7 +488,7 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             source TEXT NOT NULL,
             category TEXT,
             url TEXT,
-            headline_hash TEXT,
+            headline_hash TEXT NOT NULL,
             inserted_at TIMESTAMPTZ DEFAULT current_timestamp
         )
     """)

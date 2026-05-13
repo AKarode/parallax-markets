@@ -53,16 +53,37 @@ class CrisisIngester:
         Returns:
             Number of new events inserted.
         """
-        inserted = 0
-        existing_headlines = self._get_recent_headlines(days=7)
-
+        # Batch hash check: one query for all incoming hashes instead of N queries
+        incoming_hashes: dict[str, str] = {}
         for event in events:
-            if self._is_duplicate(event.title, existing_headlines):
-                logger.debug("Skipping duplicate headline: %s", event.title[:50])
+            incoming_hashes[_headline_hash(event.title)] = event.title
+
+        existing_hashes: set[str] = set()
+        if incoming_hashes:
+            rows = self._conn.execute(
+                "SELECT headline_hash FROM crisis_events WHERE headline_hash IN ({})".format(
+                    ",".join("?" for _ in incoming_hashes),
+                ),
+                list(incoming_hashes.keys()),
+            ).fetchall()
+            existing_hashes = {row[0] for row in rows}
+
+        # Fuzzy dedup: look back 21 days (was 7) to catch rephrased headlines
+        fuzzy_candidate_headlines = self._get_recent_headlines(days=21)
+
+        inserted = 0
+        for event in events:
+            headline_hash = _headline_hash(event.title)
+
+            if headline_hash in existing_hashes:
+                logger.debug("Skipping duplicate headline (hash match): %s", event.title[:50])
+                continue
+
+            if any(_headlines_similar(event.title, existing) for existing in fuzzy_candidate_headlines):
+                logger.debug("Skipping similar headline: %s", event.title[:50])
                 continue
 
             event_id = str(uuid.uuid4())
-            headline_hash = _headline_hash(event.title)
 
             try:
                 self._conn.execute(
@@ -83,7 +104,7 @@ class CrisisIngester:
                     ],
                 )
                 inserted += 1
-                existing_headlines.append(event.title)
+                fuzzy_candidate_headlines.append(event.title)
             except Exception:
                 logger.exception("Failed to insert crisis event: %s", event.title[:50])
 
@@ -136,21 +157,6 @@ class CrisisIngester:
             [cutoff],
         ).fetchall()
         return [row[0] for row in rows]
-
-    def _is_duplicate(self, headline: str, existing_headlines: list[str]) -> bool:
-        """Check if a headline is a duplicate of any existing headline."""
-        headline_hash = _headline_hash(headline)
-        row = self._conn.execute(
-            "SELECT 1 FROM crisis_events WHERE headline_hash = ? LIMIT 1",
-            [headline_hash],
-        ).fetchone()
-        if row:
-            return True
-
-        for existing in existing_headlines:
-            if _headlines_similar(headline, existing):
-                return True
-        return False
 
     def get_event_count(self) -> int:
         """Return total number of crisis events in the table."""
