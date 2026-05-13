@@ -67,6 +67,9 @@ class HormuzReopeningPredictor:
         recent_events: list[dict],
         world_state: WorldState,
         db_conn: duckdb.DuckDBPyConnection | None = None,
+        *,
+        context_age_hours: float | None = None,
+        crisis_context_text: str | None = None,
     ) -> PredictionOutput:
         """Run Hormuz reopening prediction pipeline.
 
@@ -91,11 +94,17 @@ class HormuzReopeningPredictor:
         recovery_100 = self._estimate_recovery(world_state, 1.00)
 
         # Step 3: LLM call
-        from parallax.prediction.crisis_context import get_crisis_context_with_metadata
+        if context_age_hours is None or crisis_context_text is None:
+            from parallax.prediction.crisis_context import get_crisis_context_with_metadata
 
-        crisis = get_crisis_context_with_metadata(db_conn)
+            crisis = get_crisis_context_with_metadata(db_conn)
+            if context_age_hours is None:
+                context_age_hours = crisis.context_age_hours
+            if crisis_context_text is None:
+                crisis_context_text = crisis.context
+
         events_summary = self._format_events(recent_events[:10])
-        prompt = crisis.context + "\n\n" + HORMUZ_SYSTEM_PROMPT.format(
+        prompt = crisis_context_text + "\n\n" + HORMUZ_SYSTEM_PROMPT.format(
             flow_data=flow_data,
             recovery_25=recovery_25,
             recovery_50=recovery_50,
@@ -110,7 +119,7 @@ class HormuzReopeningPredictor:
             prompt=prompt,
             budget=self._budget,
             max_tokens=2000,
-            context_age_hours=crisis.context_age_hours,
+            context_age_hours=context_age_hours,
         )
         ensemble = result["ensemble"]
         parsed = result["parsed"]
@@ -135,6 +144,9 @@ class HormuzReopeningPredictor:
             ensemble_probabilities=ensemble["individual_probabilities"],
             ensemble_std_dev=ensemble["std_dev"],
             ensemble_is_unstable=ensemble["is_unstable"],
+            context_age_hours=result.get("context_age_hours"),
+            penalty_factor=result.get("penalty_factor", 1.0),
+            staleness_penalty_applied=result.get("staleness_penalty_applied", False),
         )
 
     @staticmethod

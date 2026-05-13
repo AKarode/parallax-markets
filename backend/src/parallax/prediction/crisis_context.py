@@ -309,7 +309,9 @@ def get_crisis_context_with_metadata(
     reported ``context_age_hours`` is computed from the latest ``SEED_EVENTS``
     entry, NOT 0.0 — otherwise downstream code that applies the staleness
     penalty would treat the hardcoded fallback as fresh on a day when the
-    crisis ingester has fallen behind.
+    crisis ingester has fallen behind. The result's ``is_from_db`` flag lets
+    callers in a "live" data environment fire an alert when this fallback
+    triggered (the crisis ingester is probably broken).
 
     Args:
         conn: Optional DuckDB connection.

@@ -28,6 +28,9 @@ class PredictionOutput(BaseModel):
     ensemble_is_unstable: bool = False
     is_fallback: bool = False
     fallback_source_run_id: str | None = None
+    context_age_hours: float | None = None
+    penalty_factor: float = 1.0
+    staleness_penalty_applied: bool = False
 
     @field_validator("probability", "confidence")
     @classmethod

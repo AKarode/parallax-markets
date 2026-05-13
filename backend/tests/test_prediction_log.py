@@ -167,4 +167,5 @@ class TestPredictionLogTable:
             "news_context", "cascade_inputs", "created_at",
             "experiment_id", "variant",
             "is_fallback", "fallback_source_run_id",
+            "staleness_penalty_applied", "context_age_hours", "penalty_factor",
         ]

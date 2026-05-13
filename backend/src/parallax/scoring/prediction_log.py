@@ -38,6 +38,9 @@ class PredictionLogEntry(BaseModel):
     created_at: datetime
     is_fallback: bool = False
     fallback_source_run_id: str | None = None
+    staleness_penalty_applied: bool = False
+    context_age_hours: float | None = None
+    penalty_factor: float = 1.0
 
 
 class PredictionLogger:
@@ -84,6 +87,9 @@ class PredictionLogger:
             created_at=prediction.created_at,
             is_fallback=getattr(prediction, "is_fallback", False),
             fallback_source_run_id=getattr(prediction, "fallback_source_run_id", None),
+            staleness_penalty_applied=getattr(prediction, "staleness_penalty_applied", False),
+            context_age_hours=getattr(prediction, "context_age_hours", None),
+            penalty_factor=getattr(prediction, "penalty_factor", 1.0),
         )
 
         self._conn.execute(
@@ -91,8 +97,9 @@ class PredictionLogger:
             INSERT INTO prediction_log
             (log_id, run_id, data_environment, model_id, probability, direction, confidence,
              reasoning, evidence, timeframe, news_context, cascade_inputs,
-             created_at, is_fallback, fallback_source_run_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_at, is_fallback, fallback_source_run_id,
+             staleness_penalty_applied, context_age_hours, penalty_factor)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 entry.log_id,
@@ -110,6 +117,9 @@ class PredictionLogger:
                 entry.created_at.isoformat(),
                 entry.is_fallback,
                 entry.fallback_source_run_id,
+                entry.staleness_penalty_applied,
+                entry.context_age_hours,
+                entry.penalty_factor,
             ],
         )
 

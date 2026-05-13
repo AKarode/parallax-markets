@@ -256,7 +256,10 @@ def _create_core_tables(conn: duckdb.DuckDBPyConnection) -> None:
             experiment_id TEXT,
             variant TEXT,
             is_fallback BOOLEAN NOT NULL DEFAULT false,
-            fallback_source_run_id TEXT
+            fallback_source_run_id TEXT,
+            staleness_penalty_applied BOOLEAN NOT NULL DEFAULT false,
+            context_age_hours DOUBLE,
+            penalty_factor DOUBLE NOT NULL DEFAULT 1.0
         )
     """)
 
@@ -529,6 +532,9 @@ def _migrate_legacy_tables(conn: duckdb.DuckDBPyConnection) -> None:
         _add_column_if_missing(conn, "prediction_log", "variant", "TEXT")
         _add_column_if_missing(conn, "prediction_log", "is_fallback", "BOOLEAN DEFAULT false")
         _add_column_if_missing(conn, "prediction_log", "fallback_source_run_id", "TEXT")
+        _add_column_if_missing(conn, "prediction_log", "staleness_penalty_applied", "BOOLEAN DEFAULT false")
+        _add_column_if_missing(conn, "prediction_log", "context_age_hours", "DOUBLE")
+        _add_column_if_missing(conn, "prediction_log", "penalty_factor", "DOUBLE DEFAULT 1.0")
 
     if _table_exists(conn, "market_prices"):
         _add_column_if_missing(conn, "market_prices", "data_environment", "VARCHAR DEFAULT 'live'")

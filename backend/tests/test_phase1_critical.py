@@ -27,12 +27,10 @@ from parallax.db.schema import create_tables
 from parallax.prediction.crisis_context import (
     SEED_EVENTS,
     _latest_seed_event_time,
+    compute_staleness_penalty,
     get_crisis_context_with_metadata,
 )
-from parallax.prediction.ensemble import (
-    apply_context_staleness_penalty,
-    ensemble_predict,
-)
+from parallax.prediction.ensemble import ensemble_predict
 
 
 @pytest.fixture()
@@ -444,10 +442,13 @@ class TestEnsemblePenaltyWiring:
             context_age_hours=48.0,
         )
 
-        # apply_context_staleness_penalty(0.9, 48) == 0.45
+        # 0.9 * compute_staleness_penalty(48) == 0.45
         assert result["parsed"]["confidence"] == pytest.approx(0.45)
         assert result["parsed"]["staleness_penalty_applied"] is True
+        assert result["parsed"]["penalty_factor"] == pytest.approx(0.5)
         assert result["context_age_hours"] == 48.0
+        assert result["penalty_factor"] == pytest.approx(0.5)
+        assert result["staleness_penalty_applied"] is True
 
     @pytest.mark.asyncio
     async def test_fresh_context_preserves_confidence(self) -> None:
@@ -655,13 +656,10 @@ class TestApplyStalenessPenalty:
     """Sanity checks for the penalty function used by the wiring above."""
 
     def test_within_24_hours_unchanged(self) -> None:
-        assert apply_context_staleness_penalty(0.9, 24) == 0.9
+        assert 0.9 * compute_staleness_penalty(24) == 0.9
 
     def test_at_48_hours_halved(self) -> None:
-        assert apply_context_staleness_penalty(0.9, 48) == pytest.approx(0.45)
+        assert 0.9 * compute_staleness_penalty(48) == pytest.approx(0.45)
 
     def test_at_72_hours_zero(self) -> None:
-        assert apply_context_staleness_penalty(0.9, 72) == pytest.approx(0.0)
-
-    def test_none_age_unchanged(self) -> None:
-        assert apply_context_staleness_penalty(0.9, None) == 0.9
+        assert 0.9 * compute_staleness_penalty(72) == pytest.approx(0.0)

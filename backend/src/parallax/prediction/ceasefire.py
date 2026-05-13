@@ -72,6 +72,9 @@ class CeasefirePredictor:
         recent_events: list[dict],
         current_negotiations: str | None = None,
         db_conn: duckdb.DuckDBPyConnection | None = None,
+        *,
+        context_age_hours: float | None = None,
+        crisis_context_text: str | None = None,
     ) -> PredictionOutput:
         """Run ceasefire prediction pipeline.
 
@@ -93,10 +96,16 @@ class CeasefirePredictor:
         events_text = self._format_events(diplomatic) if diplomatic else self._format_events(recent_events[:5])
         context = current_negotiations or "No specific negotiation context provided."
 
-        from parallax.prediction.crisis_context import get_crisis_context_with_metadata
+        if context_age_hours is None or crisis_context_text is None:
+            from parallax.prediction.crisis_context import get_crisis_context_with_metadata
 
-        crisis = get_crisis_context_with_metadata(db_conn)
-        prompt = crisis.context + "\n\n" + CEASEFIRE_SYSTEM_PROMPT.format(
+            crisis = get_crisis_context_with_metadata(db_conn)
+            if context_age_hours is None:
+                context_age_hours = crisis.context_age_hours
+            if crisis_context_text is None:
+                crisis_context_text = crisis.context
+
+        prompt = crisis_context_text + "\n\n" + CEASEFIRE_SYSTEM_PROMPT.format(
             diplomatic_events=events_text,
             context=context,
             track_record=track_record,
@@ -108,7 +117,7 @@ class CeasefirePredictor:
             prompt=prompt,
             budget=self._budget,
             max_tokens=2000,
-            context_age_hours=crisis.context_age_hours,
+            context_age_hours=context_age_hours,
         )
         ensemble = result["ensemble"]
         parsed = result["parsed"]
@@ -133,6 +142,9 @@ class CeasefirePredictor:
             ensemble_probabilities=ensemble["individual_probabilities"],
             ensemble_std_dev=ensemble["std_dev"],
             ensemble_is_unstable=ensemble["is_unstable"],
+            context_age_hours=result.get("context_age_hours"),
+            penalty_factor=result.get("penalty_factor", 1.0),
+            staleness_penalty_applied=result.get("staleness_penalty_applied", False),
         )
 
     @staticmethod

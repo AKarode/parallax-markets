@@ -23,6 +23,7 @@ from parallax.markets.polymarket import PolymarketClient
 from parallax.markets.schemas import MarketPrice
 from parallax.ops.alerts import AlertDispatcher, build_alert_dispatcher
 from parallax.prediction.ceasefire import CeasefirePredictor
+from parallax.prediction.crisis_context import get_crisis_context_with_metadata
 from parallax.prediction.hormuz import HormuzReopeningPredictor
 from parallax.prediction.oil_price import OilPricePredictor
 from parallax.prediction.schemas import PredictionOutput
@@ -579,10 +580,44 @@ async def run_brief(
         oil_pred = OilPricePredictor(cascade, budget, anthropic_client)
         ceasefire_pred = CeasefirePredictor(budget, anthropic_client)
         hormuz_pred = HormuzReopeningPredictor(cascade, budget, anthropic_client)
+        crisis = get_crisis_context_with_metadata(conn)
+        logger.info(
+            "Crisis context: age=%.1fh from %s (%d events)",
+            crisis.context_age_hours,
+            "DB" if crisis.is_from_db else "SEED_EVENTS fallback",
+            crisis.event_count,
+        )
+        if not crisis.is_from_db and runtime.data_environment == "live":
+            await build_alert_dispatcher(db_conn=conn, run_id=run_id).emit(
+                event_type="crisis_context_fallback",
+                severity="warning",
+                message=(
+                    f"Crisis context fell back to hardcoded SEED_EVENTS "
+                    f"(age {crisis.context_age_hours:.1f}h). "
+                    "Crisis ingester may be broken."
+                ),
+                details={
+                    "context_age_hours": crisis.context_age_hours,
+                    "event_count": crisis.event_count,
+                    "run_id": run_id,
+                },
+            )
         prediction_results = await asyncio.gather(
-            oil_pred.predict(events, prices, world_state, db_conn=conn),
-            ceasefire_pred.predict(events, db_conn=conn),
-            hormuz_pred.predict(events, world_state, db_conn=conn),
+            oil_pred.predict(
+                events, prices, world_state, db_conn=conn,
+                context_age_hours=crisis.context_age_hours,
+                crisis_context_text=crisis.context,
+            ),
+            ceasefire_pred.predict(
+                events, db_conn=conn,
+                context_age_hours=crisis.context_age_hours,
+                crisis_context_text=crisis.context,
+            ),
+            hormuz_pred.predict(
+                events, world_state, db_conn=conn,
+                context_age_hours=crisis.context_age_hours,
+                crisis_context_text=crisis.context,
+            ),
             return_exceptions=True,
         )
         model_ids = ["oil_price", "ceasefire", "hormuz_reopening"]

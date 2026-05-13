@@ -17,7 +17,6 @@ from parallax.prediction.crisis_context import (
     render_crisis_context_from_db,
     seed_crisis_events,
 )
-from parallax.prediction.ensemble import apply_context_staleness_penalty
 
 
 @pytest.fixture()
@@ -106,25 +105,21 @@ class TestStalenessPenalty:
 
 
 class TestEnsembleStalenessPenalty:
-    """Tests for the ensemble.py staleness penalty wiring."""
-
-    def test_no_penalty_when_age_none(self) -> None:
-        """Confidence unchanged when context_age_hours is None."""
-        assert apply_context_staleness_penalty(0.9, None) == 0.9
+    """The penalty function is the canonical helper in crisis_context."""
 
     def test_no_penalty_within_24_hours(self) -> None:
-        """Confidence unchanged when context is fresh (<= 24h)."""
-        assert apply_context_staleness_penalty(0.9, 12) == 0.9
-        assert apply_context_staleness_penalty(0.9, 24) == 0.9
+        """Multiplier is 1.0 when context is fresh (<= 24h)."""
+        assert 0.9 * compute_staleness_penalty(12) == 0.9
+        assert 0.9 * compute_staleness_penalty(24) == 0.9
 
     def test_confidence_halved_at_48_hours(self) -> None:
-        """Confidence multiplied by 0.5 at 48h staleness."""
-        assert apply_context_staleness_penalty(0.9, 48) == pytest.approx(0.45)
+        """Multiplier is 0.5 at 48h staleness."""
+        assert 0.9 * compute_staleness_penalty(48) == pytest.approx(0.45)
 
     def test_confidence_zero_at_72_hours(self) -> None:
-        """Confidence floors to 0.0 at 72h staleness."""
-        assert apply_context_staleness_penalty(0.9, 72) == pytest.approx(0.0)
-        assert apply_context_staleness_penalty(0.9, 200) == pytest.approx(0.0)
+        """Multiplier floors to 0.0 at 72h staleness."""
+        assert 0.9 * compute_staleness_penalty(72) == pytest.approx(0.0)
+        assert 0.9 * compute_staleness_penalty(200) == pytest.approx(0.0)
 
 
 class TestFallbackToSeed:

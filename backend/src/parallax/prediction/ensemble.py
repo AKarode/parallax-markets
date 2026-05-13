@@ -8,6 +8,8 @@ import logging
 import statistics
 from typing import Any
 
+from parallax.prediction.crisis_context import compute_staleness_penalty
+
 logger = logging.getLogger(__name__)
 
 ENSEMBLE_TEMPERATURES = [0.3, 0.5, 0.7]
@@ -70,23 +72,6 @@ def compute_ensemble(probabilities: list[float]) -> dict:
         "is_unstable": std_dev > INSTABILITY_THRESHOLD,
         "individual_probabilities": list(probabilities),
     }
-
-
-def apply_context_staleness_penalty(
-    confidence: float,
-    context_age_hours: float | None,
-) -> float:
-    """Multiply confidence by the staleness penalty when context_age_hours > 24.
-
-    Penalty schedule: 1.0 at 0-24h, linear decay to 0.0 at 72h, floor at 0.0.
-    Returns the (possibly reduced) confidence; if age is None or <= 24, returns
-    the original confidence unchanged.
-    """
-    if context_age_hours is None or context_age_hours <= 24:
-        return confidence
-    penalty = 1.0 - (context_age_hours - 24) / 48
-    penalty = max(0.0, min(1.0, penalty))
-    return confidence * penalty
 
 
 async def ensemble_predict(
@@ -163,21 +148,25 @@ async def ensemble_predict(
         key=lambda p: abs(p.get("probability", 0) - ensemble_prob),
     )
 
-    if context_age_hours is not None and context_age_hours > 24:
+    penalty_factor = (
+        compute_staleness_penalty(context_age_hours)
+        if context_age_hours is not None
+        else 1.0
+    )
+    if context_age_hours is not None and penalty_factor < 1.0:
         original_confidence = float(median_parsed.get("confidence", 1.0))
-        adjusted_confidence = apply_context_staleness_penalty(
-            original_confidence, context_age_hours,
+        adjusted_confidence = original_confidence * penalty_factor
+        logger.info(
+            "Crisis context stale (age=%.1fh, penalty=%.3f): confidence %.2f -> %.2f",
+            context_age_hours,
+            penalty_factor,
+            original_confidence,
+            adjusted_confidence,
         )
-        if adjusted_confidence != original_confidence:
-            logger.info(
-                "Crisis context stale (age=%.1fh): confidence %.2f -> %.2f",
-                context_age_hours,
-                original_confidence,
-                adjusted_confidence,
-            )
-            median_parsed["confidence"] = adjusted_confidence
-            median_parsed["context_age_hours"] = context_age_hours
-            median_parsed["staleness_penalty_applied"] = True
+        median_parsed["confidence"] = adjusted_confidence
+        median_parsed["context_age_hours"] = context_age_hours
+        median_parsed["penalty_factor"] = penalty_factor
+        median_parsed["staleness_penalty_applied"] = True
 
     return {
         "ensemble": ensemble_result,
@@ -185,4 +174,6 @@ async def ensemble_predict(
         "all_parsed": all_parsed,
         "call_count": len(all_parsed),
         "context_age_hours": context_age_hours,
+        "penalty_factor": penalty_factor,
+        "staleness_penalty_applied": penalty_factor < 1.0,
     }
