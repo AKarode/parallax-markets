@@ -8,6 +8,7 @@ import duckdb
 import pytest
 
 from parallax.db.schema import create_tables
+from parallax.ingestion.crisis_ingester import _headline_hash
 from parallax.prediction.crisis_context import (
     CRISIS_TIMELINE,
     SEED_EVENTS,
@@ -35,10 +36,10 @@ class TestRenderFromDB:
         now = datetime.now(timezone.utc)
         conn.execute(
             """
-            INSERT INTO crisis_events (id, event_time, headline, source, category)
-            VALUES ('test-1', ?, 'Test crisis event', 'test', 'general')
+            INSERT INTO crisis_events (id, event_time, headline, source, category, headline_hash)
+            VALUES ('test-1', ?, 'Test crisis event', 'test', 'general', ?)
             """,
-            [now - timedelta(hours=1)],
+            [now - timedelta(hours=1), _headline_hash('Test crisis event')],
         )
 
         result = render_crisis_context_from_db(conn)
@@ -61,12 +62,12 @@ class TestRenderFromDB:
         now = datetime.now(timezone.utc)
         conn.execute(
             """
-            INSERT INTO crisis_events (id, event_time, headline, source, category)
+            INSERT INTO crisis_events (id, event_time, headline, source, category, headline_hash)
             VALUES
-                ('recent', ?, 'Recent event', 'test', 'general'),
-                ('old', ?, 'Old event', 'test', 'general')
+                ('recent', ?, 'Recent event', 'test', 'general', ?),
+                ('old', ?, 'Old event', 'test', 'general', ?)
             """,
-            [now - timedelta(days=5), now - timedelta(days=30)],
+            [now - timedelta(days=5), _headline_hash('Recent event'), now - timedelta(days=30), _headline_hash('Old event')],
         )
 
         result = render_crisis_context_from_db(conn, lookback_days=21)
@@ -137,10 +138,10 @@ class TestFallbackToSeed:
         now = datetime.now(timezone.utc)
         conn.execute(
             """
-            INSERT INTO crisis_events (id, event_time, headline, source, category)
-            VALUES ('test-1', ?, 'DB crisis event', 'test', 'general')
+            INSERT INTO crisis_events (id, event_time, headline, source, category, headline_hash)
+            VALUES ('test-1', ?, 'DB crisis event', 'test', 'general', ?)
             """,
-            [now - timedelta(hours=1)],
+            [now - timedelta(hours=1), _headline_hash('DB crisis event')],
         )
 
         context = get_crisis_context(conn)
@@ -171,9 +172,10 @@ class TestSeedCrisisEvents:
         """Should not seed when table already has events."""
         conn.execute(
             """
-            INSERT INTO crisis_events (id, event_time, headline, source, category)
-            VALUES ('existing', CURRENT_TIMESTAMP, 'Existing event', 'test', 'general')
-            """
+            INSERT INTO crisis_events (id, event_time, headline, source, category, headline_hash)
+            VALUES ('existing', CURRENT_TIMESTAMP, 'Existing event', 'test', 'general', ?)
+            """,
+            [_headline_hash("Existing event")],
         )
 
         count = seed_crisis_events(conn)
@@ -192,10 +194,10 @@ class TestContextWithMetadata:
         now = datetime.now(timezone.utc)
         conn.execute(
             """
-            INSERT INTO crisis_events (id, event_time, headline, source, category)
-            VALUES ('test-1', ?, 'Test event', 'test', 'general')
+            INSERT INTO crisis_events (id, event_time, headline, source, category, headline_hash)
+            VALUES ('test-1', ?, 'Test event', 'test', 'general', ?)
             """,
-            [now - timedelta(hours=2)],
+            [now - timedelta(hours=2), _headline_hash('Test event')],
         )
 
         result = get_crisis_context_with_metadata(conn)
