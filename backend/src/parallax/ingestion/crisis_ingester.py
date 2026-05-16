@@ -44,16 +44,7 @@ class CrisisIngester:
         events: list[NewsEvent],
         category: str = "general",
     ) -> int:
-        """Ingest news events as crisis events, deduplicating by headline.
-
-        Args:
-            events: List of NewsEvent objects from Google News or GDELT.
-            category: Category tag for the events (e.g., 'ceasefire', 'oil', 'military').
-
-        Returns:
-            Number of new events inserted.
-        """
-        # Batch hash check: one query for all incoming hashes instead of N queries
+        """Ingest news events as crisis events, deduplicating by headline."""
         incoming_hashes: dict[str, str] = {}
         for event in events:
             incoming_hashes[_headline_hash(event.title)] = event.title
@@ -68,7 +59,6 @@ class CrisisIngester:
             ).fetchall()
             existing_hashes = {row[0] for row in rows}
 
-        # Fuzzy dedup: look back 21 days (was 7) to catch rephrased headlines
         fuzzy_candidate_headlines = self._get_recent_headlines(days=21)
 
         inserted = 0
@@ -116,15 +106,7 @@ class CrisisIngester:
         events: list[dict],
         category: str = "general",
     ) -> int:
-        """Ingest events from dictionaries (for seed data).
-
-        Args:
-            events: List of dicts with 'headline', 'event_time', 'source', and optional 'url'.
-            category: Category tag for the events.
-
-        Returns:
-            Number of new events inserted.
-        """
+        """Ingest events from dictionaries (for seed data)."""
         news_events = []
         for event in events:
             event_time = event.get("event_time")
