@@ -156,7 +156,7 @@ class CrisisContextResult:
     is_from_db: bool
 
 
-def seed_crisis_events(conn: duckdb.DuckDBPyConnection) -> int:
+def seed_crisis_events(conn: "duckdb.DuckDBPyConnection") -> int:
     """Seed the crisis_events table with hardcoded events if empty.
 
     Returns:
@@ -191,7 +191,7 @@ def compute_staleness_penalty(context_age_hours: float) -> float:
 
 
 def render_crisis_context_from_db(
-    conn: duckdb.DuckDBPyConnection,
+    conn: "duckdb.DuckDBPyConnection",
     lookback_days: int = 21,
 ) -> CrisisContextResult:
     """Render crisis context from the crisis_events DB table.
@@ -258,7 +258,7 @@ def render_crisis_context_from_db(
     )
 
 
-def get_crisis_context(conn: duckdb.DuckDBPyConnection | None = None) -> str:
+def get_crisis_context(conn: "duckdb.DuckDBPyConnection | None" = None) -> str:
     """Return the full crisis context for prompt injection.
 
     If a DB connection is provided and has events, renders from the DB.
@@ -301,7 +301,7 @@ def _latest_seed_event_time() -> datetime:
 
 
 def get_crisis_context_with_metadata(
-    conn: duckdb.DuckDBPyConnection | None = None,
+    conn: "duckdb.DuckDBPyConnection | None" = None,
 ) -> CrisisContextResult:
     """Return crisis context with metadata including staleness.
 

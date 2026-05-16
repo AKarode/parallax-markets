@@ -193,4 +193,3 @@ class CeasefirePredictor:
                 goldstein = e.get("GoldsteinScale", 0)
                 lines.append(f"- {actor1} -> {actor2}: code={code}, goldstein={goldstein}")
         return "\n".join(lines)
-
