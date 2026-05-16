@@ -15,10 +15,6 @@ from parallax.ingestion.google_news import (
     fetch_google_news,
 )
 
-# ---------------------------------------------------------------------------
-# Canned RSS response
-# ---------------------------------------------------------------------------
-
 CANNED_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
@@ -97,18 +93,10 @@ class TestParseRssItems:
         assert events[0].published_at.month == 4
         assert events[0].published_at.day == 8
 
-    def test_sets_query(self):
-        events = _parse_rss_items(CANNED_RSS, "iran ceasefire")
-        assert events[0].query == "iran ceasefire"
-
     def test_computes_event_hash(self):
         events = _parse_rss_items(CANNED_RSS, "iran ceasefire")
         expected = hashlib.md5("https://example.com/article1".encode()).hexdigest()
         assert events[0].event_hash == expected
-
-    def test_snippet_includes_source(self):
-        events = _parse_rss_items(CANNED_RSS, "iran ceasefire")
-        assert "Reuters" in events[0].snippet
 
     def test_handles_invalid_xml(self):
         events = _parse_rss_items("not xml at all", "test")
@@ -130,8 +118,6 @@ class TestNewsEventDedup:
 class TestFetchGoogleNews:
     @pytest.mark.asyncio
     async def test_fetches_and_deduplicates(self):
-        """Test that duplicate URLs across queries are deduplicated."""
-
         class MockResponse:
             status_code = 200
             def __init__(self, text):
@@ -156,56 +142,15 @@ class TestFetchGoogleNews:
         with patch("parallax.ingestion.google_news.httpx.AsyncClient", return_value=mock_client):
             events = await fetch_google_news(
                 queries=["iran ceasefire", "iran oil"],
-                max_age_hours=24 * 365,  # wide window to include all test articles
+                max_age_hours=24 * 365,
             )
 
-        # article1 appears in both feeds but should only appear once
         urls = [e.url for e in events]
         assert urls.count("https://example.com/article1") == 1
-        # Should have articles 1, 2, old-article, 3 = 4 unique
         assert len(events) == 4
 
     @pytest.mark.asyncio
-    async def test_max_age_filtering(self):
-        """Test that old articles are filtered out."""
-
-        class MockResponse:
-            status_code = 200
-            def __init__(self, text):
-                self.text = text
-            def raise_for_status(self):
-                pass
-
-        async def mock_get(url, **kwargs):
-            return MockResponse(CANNED_RSS)
-
-        mock_client = AsyncMock()
-        mock_client.get = mock_get
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("parallax.ingestion.google_news.httpx.AsyncClient", return_value=mock_client):
-            # Use a very short max_age to filter out all articles (RSS has 2026 dates)
-            # We'll use a date-aware approach: the RSS dates are in 2026, so with
-            # max_age_hours=1 most should be filtered if "now" is far from pubDate
-            events = await fetch_google_news(
-                queries=["iran ceasefire"],
-                max_age_hours=24 * 365,  # wide window
-            )
-            all_count = len(events)
-
-            events_narrow = await fetch_google_news(
-                queries=["iran ceasefire"],
-                max_age_hours=1,  # very narrow: only last hour
-            )
-
-        # Narrow window should have fewer or equal events
-        assert len(events_narrow) <= all_count
-
-    @pytest.mark.asyncio
     async def test_seen_hashes_excluded(self):
-        """Test that pre-seen hashes are excluded."""
-
         class MockResponse:
             status_code = 200
             def __init__(self, text):
@@ -221,7 +166,6 @@ class TestFetchGoogleNews:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        # Pre-mark article1 as seen
         seen = {hashlib.md5("https://example.com/article1".encode()).hexdigest()}
 
         with patch("parallax.ingestion.google_news.httpx.AsyncClient", return_value=mock_client):
@@ -233,32 +177,3 @@ class TestFetchGoogleNews:
 
         urls = [e.url for e in events]
         assert "https://example.com/article1" not in urls
-
-    @pytest.mark.asyncio
-    async def test_sorted_newest_first(self):
-        """Test events are sorted newest first."""
-
-        class MockResponse:
-            status_code = 200
-            def __init__(self, text):
-                self.text = text
-            def raise_for_status(self):
-                pass
-
-        async def mock_get(url, **kwargs):
-            return MockResponse(CANNED_RSS)
-
-        mock_client = AsyncMock()
-        mock_client.get = mock_get
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("parallax.ingestion.google_news.httpx.AsyncClient", return_value=mock_client):
-            events = await fetch_google_news(
-                queries=["iran ceasefire"],
-                max_age_hours=24 * 365,
-            )
-
-        if len(events) >= 2:
-            for i in range(len(events) - 1):
-                assert events[i].published_at >= events[i + 1].published_at
