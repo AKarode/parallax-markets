@@ -223,23 +223,12 @@ class TestRunnerUsesBoundedViews:
         assert result.status == "completed"
         assert len(result.predictions) == 1
         pred = result.predictions[0]
-        # past market price was 0.40, past prediction was 0.6 -> edge = 0.20
         assert pred.predicted_probability == pytest.approx(0.6)
         assert pred.edge_predicted == pytest.approx(0.20)
 
     def test_runner_does_not_see_future_prediction_log(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """A prediction_log row with future ``created_at`` is invisible at sim_date.
-
-        Negative control: even if the prediction_log row's DATE matches the
-        sim_date, if its created_at timestamp is after end-of-day on sim_date
-        the bounded view excludes it.
-        """
         sim_date = date(2026, 4, 10)
         ticker = "FUTURELOG"
-        # Insert a row whose DATE(created_at) = sim_date but timestamp is
-        # AFTER sim_date end-of-day (impossible in practice, but a clear
-        # test of view boundedness). We achieve this by using a created_at
-        # whose date is later than the sim_date entirely.
         later_date = sim_date + timedelta(days=2)
         later_ts = datetime.combine(later_date, datetime.min.time(), tzinfo=timezone.utc)
 
@@ -269,7 +258,6 @@ class TestRunnerUsesBoundedViews:
         runner = BacktestRunner(conn, config)
         result = runner.run()
 
-        # The future-dated prediction_log row must NOT bleed back into sim_date.
         assert len(result.predictions) == 0
 
 
@@ -289,7 +277,6 @@ class TestBackfillResolutions:
             contract_tickers=[ticker],
             model_ids=["oil_price"],
         )
-        # Seed minimal data so the predictor branch finds a probability.
         past = datetime.combine(sim_date, datetime.min.time(), tzinfo=timezone.utc)
         conn.execute(
             """
@@ -320,12 +307,9 @@ class TestBackfillResolutions:
         result = runner.run()
         assert len(result.predictions) == 1
         pred = result.predictions[0]
-        # The earliest resolution after sim_date is the one priced at 0.0,
-        # NOT the latest (0.99) — that's the look-ahead defect we fixed.
         assert pred.resolution_price == pytest.approx(0.0)
 
     def test_skips_resolutions_before_sim_date(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """A resolution dated BEFORE the sim_date can't apply to that prediction."""
         sim_date = date(2026, 4, 10)
         ticker = "OLDONLY"
         before = datetime.combine(
@@ -376,7 +360,6 @@ class TestBackfillResolutions:
         runner = BacktestRunner(conn, config)
         result = runner.run()
         assert len(result.predictions) == 1
-        # Only resolution is dated before sim_date, so backfill must skip it.
         assert result.predictions[0].resolution_price is None
 
     @staticmethod
@@ -442,7 +425,6 @@ class TestEnsemblePenaltyWiring:
             context_age_hours=48.0,
         )
 
-        # 0.9 * compute_staleness_penalty(48) == 0.45
         assert result["parsed"]["confidence"] == pytest.approx(0.45)
         assert result["parsed"]["staleness_penalty_applied"] is True
         assert result["parsed"]["penalty_factor"] == pytest.approx(0.5)
@@ -469,7 +451,6 @@ class TestEnsemblePenaltyWiring:
 
     @staticmethod
     def _fake_anthropic_client(probability: float, confidence: float) -> MagicMock:
-        """Build a mock AsyncAnthropic with `messages.create` returning a parseable payload."""
         client = MagicMock()
         client.messages = MagicMock()
 
@@ -533,7 +514,6 @@ class TestPredictorPassesContextAge:
 
         assert "context_age_hours" in captured
         assert captured["context_age_hours"] is not None
-        # DB is empty so we get the SEED_EVENTS-based age (months old).
         assert captured["context_age_hours"] > 0.0
 
     @pytest.mark.asyncio
@@ -594,7 +574,6 @@ class TestPredictorPassesContextAge:
 
         monkeypatch.setattr(hormuz_mod, "ensemble_predict", _fake_ensemble)
         cascade = MagicMock()
-        # _estimate_recovery accesses cascade._config.hormuz_daily_flow via getattr
         cascade._config = MagicMock(hormuz_daily_flow=21_000_000)
         predictor = hormuz_mod.HormuzReopeningPredictor(cascade, MagicMock(), MagicMock())
         await predictor.predict(recent_events=[], world_state=WorldState(), db_conn=conn)
@@ -604,7 +583,6 @@ class TestPredictorPassesContextAge:
     async def test_predictor_uses_db_age_when_events_present(
         self, conn: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When DB has fresh events, age should be from the DB, not the seed list."""
         from parallax.prediction import oil_price as oil_mod
         from parallax.simulation.world_state import WorldState
 
@@ -648,7 +626,6 @@ class TestPredictorPassesContextAge:
 
         age = captured.get("context_age_hours")
         assert age is not None
-        # 2 hours old, give some tolerance
         assert age == pytest.approx(2.0, abs=0.5)
 
 
