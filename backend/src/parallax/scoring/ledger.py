@@ -264,7 +264,7 @@ class SignalLedger:
                 trade_refused_reason = COALESCE(?, trade_refused_reason)
             WHERE signal_id = ?
             """,
-            [execution_status, entry_order_id, position_id, position_id, traded, trade_refused_reason, signal_id],
+            [execution_status, entry_order_id, None, position_id, traded, trade_refused_reason, signal_id],
         )
 
     def _compute_suggested_size(self, model_id: str, proxy_class: str) -> str:

@@ -46,13 +46,19 @@ async def fetch_oil_prices(
     should_close = client is None
     client = client or httpx.AsyncClient(timeout=30.0)
 
+    data = None
     try:
         resp = await client.get(EIA_BASE, params=params)
         resp.raise_for_status()
         data = resp.json()
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        logger.warning("EIA fetch failed: %s", exc)
     finally:
         if should_close:
             await client.aclose()
+
+    if data is None:
+        return []
 
     rows = data.get("response", {}).get("data", [])
     logger.info("EIA: fetched %d %s price rows", len(rows), series)

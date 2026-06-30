@@ -79,7 +79,7 @@ class CascadeEngine:
         Returns:
             Dict with 'bypass_flow' in bbl/day.
         """
-        if supply_loss <= 0:
+        if supply_loss <= 0 or self._config.hormuz_daily_flow == 0:
             return {"bypass_flow": 0.0}
 
         loss_fraction = min(1.0, supply_loss / self._config.hormuz_daily_flow)
@@ -108,7 +108,7 @@ class CascadeEngine:
             New oil price, clamped to [floor, ceiling].
         """
         net_loss = max(0.0, supply_loss - bypass_active)
-        if net_loss == 0:
+        if net_loss == 0 or self._config.hormuz_daily_flow == 0:
             return current_price
 
         loss_fraction = net_loss / self._config.hormuz_daily_flow

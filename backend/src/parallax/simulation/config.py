@@ -49,6 +49,8 @@ class ScenarioConfig:
 
     @property
     def reroute_distance_penalty_pct(self) -> float:
+        if self.hormuz_to_europe_via_suez_nm == 0:
+            return 0.0
         return (self.cape_reroute_nm - self.hormuz_to_europe_via_suez_nm) / self.hormuz_to_europe_via_suez_nm
 
 
