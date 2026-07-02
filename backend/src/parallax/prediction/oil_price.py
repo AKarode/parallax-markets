@@ -216,4 +216,3 @@ class OilPricePredictor:
             value = p.get("value", "?")
             lines.append(f"- {period}: ${value}")
         return "\n".join(lines)
-

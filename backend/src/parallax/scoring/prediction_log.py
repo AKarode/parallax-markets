@@ -1,9 +1,4 @@
-"""Append-only prediction log backed by DuckDB.
-
-Persists every prediction the system makes with full context:
-probability, reasoning, evidence, news inputs, and cascade state.
-Each prediction run shares a run_id for correlation.
-"""
+"""Append-only prediction log backed by DuckDB."""
 
 from __future__ import annotations
 
@@ -58,17 +53,6 @@ class PredictionLogger:
         *,
         data_environment: str = "live",
     ) -> PredictionLogEntry:
-        """Persist a prediction with full context.
-
-        Args:
-            run_id: Shared ID for all predictions in one brief run.
-            prediction: The PredictionOutput from a model.
-            news_context: List of news event dicts (title, url, source, fetched_at).
-            cascade_inputs: Cascade engine state dict, or None for non-cascade models.
-
-        Returns:
-            PredictionLogEntry with all fields populated.
-        """
         log_id = str(uuid.uuid4())
 
         entry = PredictionLogEntry(
@@ -132,10 +116,6 @@ class PredictionLogger:
     def get_predictions(
         self, run_id: str | None = None, limit: int = 100,
     ) -> list[PredictionLogEntry]:
-        """Return predictions from the log, optionally filtered by run_id.
-
-        Results ordered by created_at descending.
-        """
         if run_id is not None:
             rows = self._conn.execute(
                 """
@@ -165,7 +145,6 @@ class PredictionLogger:
         return [self._row_to_entry(row) for row in rows]
 
     def _row_to_entry(self, row: tuple) -> PredictionLogEntry:
-        """Convert a DuckDB row tuple to a PredictionLogEntry."""
         evidence_raw = row[8]
         news_raw = row[10]
         cascade_raw = row[11]

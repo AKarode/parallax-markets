@@ -14,24 +14,19 @@ from parallax.prediction.schemas import PredictionOutput
 
 
 class TestFallbackPrediction:
-    """Tests for _get_fallback_prediction helper."""
-
     @pytest.fixture()
     def conn(self) -> duckdb.DuckDBPyConnection:
-        """In-memory DuckDB with schema."""
         conn = duckdb.connect(":memory:")
         create_tables(conn)
         return conn
 
     @pytest.mark.asyncio
     async def test_fallback_returns_none_when_no_history(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """No previous predictions -> returns None."""
         result = await _get_fallback_prediction(conn, "oil_price")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_fallback_returns_previous_prediction(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Returns most recent non-dry-run prediction with provenance."""
         conn.execute(
             """
             INSERT INTO prediction_log
@@ -42,9 +37,7 @@ class TestFallbackPrediction:
              'Previous oil analysis', '7d', 'live', CURRENT_TIMESTAMP)
             """
         )
-
         result = await _get_fallback_prediction(conn, "oil_price")
-
         assert result is not None
         assert result.model_id == "oil_price"
         assert result.probability == 0.72
@@ -56,7 +49,6 @@ class TestFallbackPrediction:
 
     @pytest.mark.asyncio
     async def test_fallback_ignores_dry_run(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Dry-run predictions should not be used as fallbacks."""
         conn.execute(
             """
             INSERT INTO prediction_log
@@ -67,14 +59,11 @@ class TestFallbackPrediction:
              'Dry run test', '7d', 'dry_run', CURRENT_TIMESTAMP)
             """
         )
-
         result = await _get_fallback_prediction(conn, "oil_price")
-
         assert result is None
 
     @pytest.mark.asyncio
     async def test_fallback_returns_most_recent(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Returns the most recent prediction, not older ones."""
         conn.execute(
             """
             INSERT INTO prediction_log
@@ -87,16 +76,13 @@ class TestFallbackPrediction:
              'New prediction', '7d', 'live', CURRENT_TIMESTAMP - INTERVAL 1 HOUR)
             """
         )
-
         result = await _get_fallback_prediction(conn, "oil_price")
-
         assert result is not None
         assert result.probability == 0.80
         assert result.confidence == 0.85
 
     @pytest.mark.asyncio
     async def test_fallback_refuses_stale_candidate(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Candidate older than max_age_hours is refused (returns None)."""
         conn.execute(
             """
             INSERT INTO prediction_log
@@ -107,14 +93,11 @@ class TestFallbackPrediction:
              'Stale prediction', '7d', 'live', CURRENT_TIMESTAMP - INTERVAL 12 HOUR)
             """
         )
-
         result = await _get_fallback_prediction(conn, "oil_price", max_age_hours=6.0)
-
         assert result is None
 
     @pytest.mark.asyncio
     async def test_fallback_skips_prior_fallback_rows(self, conn: duckdb.DuckDBPyConnection) -> None:
-        """Previous fallback rows are filtered to prevent recursive chaining."""
         conn.execute(
             """
             INSERT INTO prediction_log
@@ -130,41 +113,30 @@ class TestFallbackPrediction:
              CURRENT_TIMESTAMP - INTERVAL 1 HOUR, true, 'run-original')
             """
         )
-
         result = await _get_fallback_prediction(conn, "oil_price")
-
         assert result is not None
         assert result.fallback_source_run_id == "run-original"
         assert result.probability == 0.72
 
 
 class TestGatherExceptionHandling:
-    """Tests that asyncio.gather failures don't crash the brief."""
-
     @pytest.mark.asyncio
     async def test_dry_run_completes_successfully(self) -> None:
-        """Dry run should complete without issues."""
         result = await run_brief(dry_run=True, no_trade=True)
         assert "PARALLAX DAILY INTELLIGENCE BRIEF" in result
         assert "OIL PRICE" in result
 
     @pytest.mark.asyncio
     async def test_predictor_exception_logged_not_raised(self) -> None:
-        """If a predictor raises an exception, it should be logged but not crash the brief."""
         with patch("parallax.cli.brief._fetch_gdelt_events", new_callable=AsyncMock) as mock_events:
             mock_events.return_value = []
-
             result = await run_brief(dry_run=True, no_trade=True)
             assert "PARALLAX DAILY INTELLIGENCE BRIEF" in result
 
 
 class TestSignalSetValid:
-    """Tests that the brief returns a valid signal set even with partial failures."""
-
     @pytest.mark.asyncio
     async def test_dry_run_produces_signals(self) -> None:
-        """Dry run should produce valid signals through the mapping pipeline."""
         result = await run_brief(dry_run=True, no_trade=True)
-
         assert "SIGNAL AUDIT" in result
         assert any(signal in result for signal in ["BUY_YES", "BUY_NO", "HOLD", "REFUSED"])
