@@ -38,10 +38,24 @@ class DbWriter:
             if op is None:
                 break
             try:
-                if op.params:
-                    self._conn.execute(op.sql, op.params)
-                else:
-                    self._conn.execute(op.sql)
-            except Exception:
-                logger.exception("DB write failed: %s", op.sql[:100])
-            self._queue.task_done()
+                try:
+                    self._conn.execute("BEGIN")
+                    if op.params:
+                        self._conn.execute(op.sql, op.params)
+                    else:
+                        self._conn.execute(op.sql)
+                    self._conn.execute("COMMIT")
+                except Exception as exc:
+                    try:
+                        self._conn.execute("ROLLBACK")
+                    except Exception:
+                        logger.error("DB rollback failed for sql=%r", op.sql[:200])
+                    params_repr = repr(op.params)[:200] if op.params else None
+                    logger.error(
+                        "DB write failed: sql=%r params=%r err=%s",
+                        op.sql[:200],
+                        params_repr,
+                        exc,
+                    )
+            finally:
+                self._queue.task_done()

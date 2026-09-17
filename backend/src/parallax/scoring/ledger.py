@@ -243,12 +243,30 @@ class SignalLedger:
         )
         return record
 
+    def update_signal_action(
+        self,
+        signal_id: str,
+        new_signal: str,
+        *,
+        trade_refused_reason: str | None = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            UPDATE signal_ledger
+            SET signal = ?,
+                trade_refused_reason = COALESCE(?, trade_refused_reason)
+            WHERE signal_id = ?
+            """,
+            [new_signal, trade_refused_reason, signal_id],
+        )
+
     def update_execution(
         self,
         signal_id: str,
         *,
         execution_status: str,
         entry_order_id: str | None = None,
+        trade_id: str | None = None,
         position_id: str | None = None,
         traded: bool | None = None,
         trade_refused_reason: str | None = None,
@@ -264,7 +282,7 @@ class SignalLedger:
                 trade_refused_reason = COALESCE(?, trade_refused_reason)
             WHERE signal_id = ?
             """,
-            [execution_status, entry_order_id, position_id, position_id, traded, trade_refused_reason, signal_id],
+            [execution_status, entry_order_id, trade_id, position_id, traded, trade_refused_reason, signal_id],
         )
 
     def _compute_suggested_size(self, model_id: str, proxy_class: str) -> str:
@@ -313,19 +331,34 @@ class SignalLedger:
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
 
-    def get_actionable_signals(self) -> list[SignalRecord]:
+    def get_actionable_signals(self, run_id: str | None = None) -> list[SignalRecord]:
         columns = ", ".join(self.SIGNAL_COLUMNS)
-        rows = self._conn.execute(
-            f"""
-            SELECT {columns}
-            FROM signal_ledger
-            WHERE signal IN ('BUY_YES', 'BUY_NO')
-              AND entry_price_is_executable = true
-              AND traded = false
-              AND execution_status IN ('not_attempted', 'rejected', 'cancelled')
-            ORDER BY abs(COALESCE(effective_edge, 0.0)) DESC
-            """
-        ).fetchall()
+        if run_id is not None:
+            rows = self._conn.execute(
+                f"""
+                SELECT {columns}
+                FROM signal_ledger
+                WHERE signal IN ('BUY_YES', 'BUY_NO')
+                  AND entry_price_is_executable = true
+                  AND traded = false
+                  AND execution_status IN ('not_attempted', 'rejected', 'cancelled')
+                  AND run_id = ?
+                ORDER BY abs(COALESCE(effective_edge, 0.0)) DESC
+                """,
+                [run_id],
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                f"""
+                SELECT {columns}
+                FROM signal_ledger
+                WHERE signal IN ('BUY_YES', 'BUY_NO')
+                  AND entry_price_is_executable = true
+                  AND traded = false
+                  AND execution_status IN ('not_attempted', 'rejected', 'cancelled')
+                ORDER BY abs(COALESCE(effective_edge, 0.0)) DESC
+                """
+            ).fetchall()
         return [self._row_to_record(row) for row in rows]
 
     def mark_traded(self, signal_id: str, trade_id: str) -> None:

@@ -14,7 +14,7 @@ import duckdb
 
 from parallax.budget.tracker import BudgetTracker
 from parallax.prediction.ensemble import ensemble_predict
-from parallax.prediction.schemas import PredictionOutput
+from parallax.prediction.schemas import PredictionOutput, _sanitize_headline
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.world_state import WorldState
 
@@ -194,13 +194,15 @@ class HormuzReopeningPredictor:
         for e in events[:20]:
             # Support both new news format and legacy GDELT BigQuery format
             if "title" in e:
-                lines.append(f"- [{e.get('published_at', 'unknown')}] {e['title']}")
+                published = _sanitize_headline(str(e.get("published_at", "unknown")))
+                title = _sanitize_headline(e["title"])
+                lines.append(f"- [{published}] {title}")
                 if e.get("snippet"):
-                    lines.append(f"  {e['snippet'][:200]}")
+                    lines.append(f"  {_sanitize_headline(e['snippet'])}")
             else:
-                actor1 = e.get("Actor1Name", "Unknown")
-                actor2 = e.get("Actor2Name", "Unknown")
-                code = e.get("EventCode", "?")
+                actor1 = _sanitize_headline(str(e.get("Actor1Name", "Unknown")))
+                actor2 = _sanitize_headline(str(e.get("Actor2Name", "Unknown")))
+                code = _sanitize_headline(str(e.get("EventCode", "?")))
                 lines.append(f"- {actor1} -> {actor2}: code={code}")
         return "\n".join(lines)
 

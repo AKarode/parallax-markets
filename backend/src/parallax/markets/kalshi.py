@@ -172,15 +172,74 @@ class KalshiClient:
         return data.get("markets", [])
 
     async def search_markets(self, query: str) -> list[dict]:
-        params = {"status": "open"}
-        data = await self._request("GET", "/markets", params=params)
-        markets = data.get("markets", [])
-        q = query.lower()
+        """Search open markets by query string.
+
+        Tries server-side filtering first (Kalshi /markets supports
+        ``series_ticker``, ``event_ticker``, and ``tickers`` params). When the
+        query matches a known series/event prefix, we narrow the fetch on the
+        wire. Otherwise we paginate via ``cursor`` and apply substring filter
+        client-side. A page cap prevents runaway scans on the full market list.
+        """
+        q = query.strip()
+        q_lower = q.lower()
+        q_upper = q.upper()
+
+        base_params: dict[str, Any] = {"status": "open", "limit": 200}
+
+        # Prefer server-side narrowing when query looks like a ticker/series.
+        # Kalshi tickers are uppercase alphanumerics with optional dashes
+        # (e.g. KXCLOSEHORMUZ, KXCLOSEHORMUZ-27JAN).
+        looks_like_ticker = bool(q) and q_upper.replace("-", "").replace("_", "").isalnum()
+        narrowed_params: dict[str, Any] | None = None
+        if looks_like_ticker:
+            if "-" in q_upper:
+                # Full event ticker (series-suffix), e.g. KXCLOSEHORMUZ-27JAN
+                narrowed_params = {**base_params, "event_ticker": q_upper}
+            else:
+                # Series prefix, e.g. KXCLOSEHORMUZ
+                narrowed_params = {**base_params, "series_ticker": q_upper}
+
+        async def _paginate(params: dict[str, Any], max_pages: int = 20) -> list[dict]:
+            collected: list[dict] = []
+            cursor: str | None = None
+            for _ in range(max_pages):
+                page_params = dict(params)
+                if cursor:
+                    page_params["cursor"] = cursor
+                data = await self._request("GET", "/markets", params=page_params)
+                page = data.get("markets", []) or []
+                collected.extend(page)
+                cursor = data.get("cursor") or None
+                if not cursor or not page:
+                    break
+            return collected
+
+        markets: list[dict] = []
+        if narrowed_params is not None:
+            try:
+                markets = await _paginate(narrowed_params)
+            except KalshiAPIError as exc:
+                # Server rejected the narrow param (e.g. unknown series).
+                # Fall back to unfiltered scan rather than miss results.
+                logger.debug(
+                    "Kalshi narrowed search failed (%s); falling back to scan",
+                    exc.status_code,
+                )
+                markets = []
+
+        if not markets:
+            markets = await _paginate(base_params)
+
+        if not q_lower:
+            return markets
+
         return [
             market for market in markets
-            if q in market.get("title", "").lower()
-            or q in market.get("ticker", "").lower()
-            or q in market.get("subtitle", "").lower()
+            if q_lower in (market.get("title") or "").lower()
+            or q_lower in (market.get("ticker") or "").lower()
+            or q_lower in (market.get("subtitle") or "").lower()
+            or q_lower in (market.get("event_ticker") or "").lower()
+            or q_lower in (market.get("series_ticker") or "").lower()
         ]
 
     def _normalize_market_snapshot(self, market: dict[str, Any]) -> MarketPrice:

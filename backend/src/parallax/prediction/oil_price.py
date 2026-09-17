@@ -14,7 +14,7 @@ import duckdb
 
 from parallax.budget.tracker import BudgetTracker
 from parallax.prediction.ensemble import ensemble_predict
-from parallax.prediction.schemas import PredictionOutput
+from parallax.prediction.schemas import PredictionOutput, _sanitize_headline
 from parallax.simulation.cascade import CascadeEngine
 from parallax.simulation.world_state import WorldState
 
@@ -26,18 +26,15 @@ Context:
 - Cascade analysis shows {supply_loss:.0f} bbl/day disruption
 - Bypass flow: {bypass_flow:.0f} bbl/day through alternate routes
 - Price shock estimate: {price_shock_pct:.1f}%
-- Current Brent price: ${current_price:.2f}/bbl
+- Brent {price_signal}
 
 Recent GDELT events:
 {events_summary}
 
-Current EIA price data:
-{price_data}
-
 ## YOUR TRACK RECORD
 {track_record}
 
-Consider what the market may already be pricing in and where it might be wrong.
+Consider what the market may already be pricing in and where it might be wrong. Reason from supply/demand fundamentals and cascade dynamics, not from anchoring to the current price level.
 
 Output ONLY valid JSON (no markdown):
 {{
@@ -47,7 +44,32 @@ Output ONLY valid JSON (no markdown):
   "magnitude_range": [<low_dollars>, <high_dollars>],
   "reasoning": "<detailed chain-of-thought analysis (500-1000 words). Explain what the market may be missing, second-order effects, and key uncertainties>",
   "evidence": ["<evidence 1>", "<evidence 2>", "<evidence 3>", "...(3-5 total)"]
-}}"""
+}}
+
+## Reference Data
+{price_data}"""
+
+
+def _classify_price_regime(price: float) -> str:
+    """Bucket Brent price into a regime label to avoid LLM anchoring on exact $."""
+    if price < 80.0:
+        return "normal"
+    if price < 100.0:
+        return "elevated"
+    return "high"
+
+
+def _build_price_signal(current_price: float, pct_change_24h: float | None) -> str:
+    """Build a relative price signal string (no verbatim $ value in reasoning frame).
+
+    Returns a regime + delta signal rather than the literal price to reduce
+    mean-reversion anchoring bias.
+    """
+    regime = _classify_price_regime(current_price)
+    if pct_change_24h is None:
+        # TODO: wire pct_change_24h through from EIA history when available
+        return f"price is in {regime} regime"
+    return f"price moved {pct_change_24h:+.1f}% in last 24h, currently in {regime} regime"
 
 
 class OilPricePredictor:
@@ -128,11 +150,13 @@ class OilPricePredictor:
             if crisis_context_text is None:
                 crisis_context_text = crisis.context
 
+        # TODO: pct_change_24h not yet plumbed through current_prices; use regime-only signal
+        price_signal = _build_price_signal(current_price, pct_change_24h=None)
         prompt = crisis_context_text + "\n\n" + OIL_PRICE_SYSTEM_PROMPT.format(
             supply_loss=supply_loss,
             bypass_flow=bypass_flow,
             price_shock_pct=price_shock_pct,
-            current_price=current_price,
+            price_signal=price_signal,
             events_summary=events_summary,
             price_data=price_data,
             track_record=track_record,
@@ -196,13 +220,15 @@ class OilPricePredictor:
         for e in events[:20]:
             # Support both new news format and legacy GDELT BigQuery format
             if "title" in e:
-                lines.append(f"- [{e.get('published_at', 'unknown')}] {e['title']}")
+                published = _sanitize_headline(str(e.get("published_at", "unknown")))
+                title = _sanitize_headline(e["title"])
+                lines.append(f"- [{published}] {title}")
                 if e.get("snippet"):
-                    lines.append(f"  {e['snippet'][:200]}")
+                    lines.append(f"  {_sanitize_headline(e['snippet'])}")
             else:
-                actor1 = e.get("Actor1Name", "Unknown")
-                actor2 = e.get("Actor2Name", "Unknown")
-                action = e.get("EventCode", "")
+                actor1 = _sanitize_headline(str(e.get("Actor1Name", "Unknown")))
+                actor2 = _sanitize_headline(str(e.get("Actor2Name", "Unknown")))
+                action = _sanitize_headline(str(e.get("EventCode", "")))
                 lines.append(f"- {actor1} -> {actor2}: {action}")
         return "\n".join(lines)
 

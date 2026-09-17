@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -103,8 +102,14 @@ class TestParseRssItems:
 
     def test_computes_event_hash(self):
         events = _parse_rss_items(CANNED_RSS, "iran ceasefire")
-        expected = hashlib.md5("https://example.com/article1".encode()).hexdigest()
-        assert events[0].event_hash == expected
+        expected_event = NewsEvent(
+            title="Iran and US reach preliminary ceasefire agreement",
+            url="https://example.com/article1",
+            source="google_news",
+            published_at=events[0].published_at,
+        )
+        assert events[0].event_hash == expected_event.event_hash
+        assert len(events[0].event_hash) == 64  # sha256 hex length
 
     def test_snippet_includes_source(self):
         events = _parse_rss_items(CANNED_RSS, "iran ceasefire")
@@ -116,15 +121,33 @@ class TestParseRssItems:
 
 
 class TestNewsEventDedup:
-    def test_same_url_same_hash(self):
+    def test_same_title_and_url_same_hash(self):
         e1 = NewsEvent(title="A", url="https://x.com/1", source="google_news", published_at=datetime.now(timezone.utc))
-        e2 = NewsEvent(title="B", url="https://x.com/1", source="gdelt_doc", published_at=datetime.now(timezone.utc))
+        e2 = NewsEvent(title="A", url="https://x.com/1", source="gdelt_doc", published_at=datetime.now(timezone.utc))
         assert e1.event_hash == e2.event_hash
 
     def test_different_url_different_hash(self):
         e1 = NewsEvent(title="A", url="https://x.com/1", source="google_news", published_at=datetime.now(timezone.utc))
         e2 = NewsEvent(title="A", url="https://x.com/2", source="google_news", published_at=datetime.now(timezone.utc))
         assert e1.event_hash != e2.event_hash
+
+    def test_same_url_different_title_different_hash(self):
+        """New behavior: republished articles with same URL but different framing dedupe separately."""
+        e1 = NewsEvent(title="A", url="https://x.com/1", source="google_news", published_at=datetime.now(timezone.utc))
+        e2 = NewsEvent(title="B", url="https://x.com/1", source="gdelt_doc", published_at=datetime.now(timezone.utc))
+        assert e1.event_hash != e2.event_hash
+
+    def test_title_normalization_ignores_case_and_punctuation(self):
+        """Hash is stable across case and trailing-punctuation variations."""
+        e1 = NewsEvent(title="Iran US Talks Stall!", url="https://x.com/1", source="s", published_at=datetime.now(timezone.utc))
+        e2 = NewsEvent(title="iran us talks stall", url="https://x.com/1", source="s", published_at=datetime.now(timezone.utc))
+        assert e1.event_hash == e2.event_hash
+
+    def test_url_canonicalization_strips_tracking_params(self):
+        """Tracking params like utm_source don't change the hash."""
+        e1 = NewsEvent(title="A", url="https://x.com/path?utm_source=feed", source="s", published_at=datetime.now(timezone.utc))
+        e2 = NewsEvent(title="A", url="https://x.com/path", source="s", published_at=datetime.now(timezone.utc))
+        assert e1.event_hash == e2.event_hash
 
 
 class TestFetchGoogleNews:
@@ -221,8 +244,14 @@ class TestFetchGoogleNews:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        # Pre-mark article1 as seen
-        seen = {hashlib.md5("https://example.com/article1".encode()).hexdigest()}
+        # Pre-mark article1 as seen using new hash format
+        seen_event = NewsEvent(
+            title="Iran and US reach preliminary ceasefire agreement",
+            url="https://example.com/article1",
+            source="google_news",
+            published_at=datetime.now(timezone.utc),
+        )
+        seen = {seen_event.event_hash}
 
         with patch("parallax.ingestion.google_news.httpx.AsyncClient", return_value=mock_client):
             events = await fetch_google_news(

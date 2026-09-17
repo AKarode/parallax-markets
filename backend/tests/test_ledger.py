@@ -352,3 +352,113 @@ class TestSignalLedgerTable:
             "model_was_correct", "proxy_was_aligned",
         }
         assert expected.issubset(col_names)
+
+
+class TestUpdateExecutionTradeIdBinding:
+    """Regression: update_execution() must bind trade_id parameter to the trade_id column."""
+
+    def test_trade_id_lands_in_trade_id_column(
+        self, ledger, conn, sample_prediction, sample_mapping, sample_market,
+    ):
+        signal = ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        ledger.update_execution(
+            signal.signal_id,
+            execution_status="filled",
+            entry_order_id="order-001",
+            trade_id="trade-xyz-999",
+            position_id="position-123",
+            traded=True,
+        )
+        row = conn.execute(
+            "SELECT trade_id, position_id, entry_order_id FROM signal_ledger WHERE signal_id = ?",
+            [signal.signal_id],
+        ).fetchone()
+        assert row[0] == "trade-xyz-999"
+        assert row[1] == "position-123"
+        assert row[2] == "order-001"
+
+    def test_trade_id_not_overwritten_by_position_id(
+        self, ledger, conn, sample_prediction, sample_mapping, sample_market,
+    ):
+        """Verify the historical bug — trade_id overwritten with position_id — no longer occurs."""
+        signal = ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        ledger.update_execution(
+            signal.signal_id,
+            execution_status="filled",
+            trade_id="real-trade-id",
+            position_id="some-position-id",
+        )
+        row = conn.execute(
+            "SELECT trade_id FROM signal_ledger WHERE signal_id = ?",
+            [signal.signal_id],
+        ).fetchone()
+        assert row[0] != "some-position-id"
+        assert row[0] == "real-trade-id"
+
+
+class TestGetActionableSignalsRunIdFilter:
+    """Regression: get_actionable_signals must filter by run_id to avoid stale signal retries."""
+
+    def test_filter_by_run_id_returns_only_matching(
+        self, ledger, conn, sample_prediction, sample_mapping, sample_market,
+    ):
+        s1 = ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        s2 = ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        conn.execute(
+            "UPDATE signal_ledger SET run_id = ? WHERE signal_id = ?",
+            ["run-current", s1.signal_id],
+        )
+        conn.execute(
+            "UPDATE signal_ledger SET run_id = ? WHERE signal_id = ?",
+            ["run-stale", s2.signal_id],
+        )
+
+        current = ledger.get_actionable_signals(run_id="run-current")
+        assert len(current) == 1
+        assert current[0].signal_id == s1.signal_id
+
+        stale = ledger.get_actionable_signals(run_id="run-stale")
+        assert len(stale) == 1
+        assert stale[0].signal_id == s2.signal_id
+
+    def test_no_run_id_returns_all_actionable(
+        self, ledger, sample_prediction, sample_mapping, sample_market,
+    ):
+        """Backwards compatibility: no run_id arg returns all (existing test behavior preserved)."""
+        ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        actionable = ledger.get_actionable_signals()
+        assert len(actionable) == 1
+
+
+class TestUpdateSignalAction:
+    """update_signal_action persists deconfliction decisions to DB."""
+
+    def test_updates_signal_to_hold(
+        self, ledger, conn, sample_prediction, sample_mapping, sample_market,
+    ):
+        signal = ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        assert signal.signal == "BUY_YES"
+
+        ledger.update_signal_action(
+            signal.signal_id,
+            "HOLD",
+            trade_refused_reason="deconflicted: lower-edge oil signal",
+        )
+
+        row = conn.execute(
+            "SELECT signal, trade_refused_reason FROM signal_ledger WHERE signal_id = ?",
+            [signal.signal_id],
+        ).fetchone()
+        assert row[0] == "HOLD"
+        assert "deconflicted" in row[1]
+
+    def test_get_actionable_excludes_deconflicted_signal(
+        self, ledger, sample_prediction, sample_mapping, sample_market,
+    ):
+        """After update_signal_action to HOLD, signal must NOT appear in actionable list."""
+        signal = ledger.record_signal(sample_prediction, sample_mapping, sample_market)
+        assert len(ledger.get_actionable_signals()) == 1
+
+        ledger.update_signal_action(signal.signal_id, "HOLD")
+
+        assert len(ledger.get_actionable_signals()) == 0

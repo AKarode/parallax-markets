@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -52,7 +51,7 @@ CANNED_RESPONSE_2 = {
     "articles": [
         {
             "url": "https://reuters.com/iran-talks-2026",
-            "title": "Iran ceasefire talks enter final round (updated)",
+            "title": "Iran ceasefire talks enter final round",
             "seendate": "20260408T070000Z",
             "domain": "reuters.com",
             "language": "English",
@@ -128,8 +127,15 @@ class TestParseArticles:
 
     def test_computes_event_hash(self):
         events = _parse_articles(CANNED_RESPONSE, "test")
-        expected = hashlib.md5("https://reuters.com/iran-talks-2026".encode()).hexdigest()
-        assert events[0].event_hash == expected
+        from parallax.ingestion.google_news import NewsEvent
+        expected_event = NewsEvent(
+            title="Iran ceasefire talks enter final round",
+            url="https://reuters.com/iran-talks-2026",
+            source=events[0].source,
+            published_at=events[0].published_at,
+        )
+        assert events[0].event_hash == expected_event.event_hash
+        assert len(events[0].event_hash) == 64
 
     def test_empty_articles(self):
         events = _parse_articles({"articles": []}, "test")
@@ -211,7 +217,15 @@ class TestFetchGdeltDocs:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        seen = {hashlib.md5("https://reuters.com/iran-talks-2026".encode()).hexdigest()}
+        from parallax.ingestion.google_news import NewsEvent
+        from datetime import datetime, timezone
+        seen_event = NewsEvent(
+            title="Iran ceasefire talks enter final round",
+            url="https://reuters.com/iran-talks-2026",
+            source="gdelt_doc",
+            published_at=datetime.now(timezone.utc),
+        )
+        seen = {seen_event.event_hash}
 
         with patch("parallax.ingestion.gdelt_doc.httpx.AsyncClient", return_value=mock_client):
             with patch("parallax.ingestion.gdelt_doc.asyncio.sleep", new_callable=AsyncMock):

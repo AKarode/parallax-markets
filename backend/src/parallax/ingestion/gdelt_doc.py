@@ -7,7 +7,6 @@ Direct HTTP access to GDELT's article database. No API key needed.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import datetime, timezone
 
@@ -126,6 +125,20 @@ async def fetch_gdelt_docs(
             except ValueError:
                 logger.warning("GDELT DOC returned invalid JSON for query=%s", query)
                 continue
+
+            raw_articles = data.get("articles", []) or []
+            if len(raw_articles) >= max_records:
+                # GDELT DOC 2.0 lacks a stable cursor; when the response is full,
+                # additional articles beyond max_records are silently dropped.
+                # Surface this so downstream knows the window may be truncated.
+                logger.warning(
+                    "GDELT DOC likely truncated for query=%s: got %d articles "
+                    "(max_records=%d, timespan=%s). Consider narrowing timespan.",
+                    query,
+                    len(raw_articles),
+                    max_records,
+                    timespan,
+                )
 
             items = _parse_articles(data, query)
 

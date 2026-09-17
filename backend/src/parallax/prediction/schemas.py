@@ -2,9 +2,31 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_headline(text: str) -> str:
+    """Sanitize a headline before interpolating into LLM prompts.
+
+    Makes prompt injection harder (not impossible) by stripping control chars,
+    capping length, neutralizing triple-quotes, and escaping prompt-template
+    delimiters. Input is news APIs, not adversarial user input.
+    """
+    if not text:
+        return ""
+    cleaned = text.replace("\n", " ").replace("\r", " ")
+    cleaned = _CONTROL_CHAR_RE.sub(" ", cleaned)
+    cleaned = cleaned.replace('"""', '"_"')
+    cleaned = cleaned.replace("`", "'").replace("{", "(").replace("}", ")")
+    return cleaned[:300]
 
 
 class PredictionOutput(BaseModel):
@@ -45,3 +67,23 @@ class PredictionOutput(BaseModel):
         if v not in ("increase", "decrease", "stable"):
             raise ValueError(f"Direction must be increase/decrease/stable, got {v}")
         return v
+
+    @model_validator(mode="after")
+    def check_probability_confidence_consistency(self) -> PredictionOutput:
+        """Clamp confidence when it contradicts the probability estimate.
+
+        Very high confidence (>0.9) paired with a near-50/50 probability is
+        logically inconsistent: the model claims certainty about an explicit
+        coin-flip. We log a warning and clamp confidence rather than fail
+        validation so predictions still flow through the pipeline.
+        """
+        if self.confidence > 0.9 and abs(self.probability - 0.5) < 0.1:
+            logger.warning(
+                "Inconsistent prediction for %s: confidence=%.3f but probability=%.3f "
+                "(near 50/50). Clamping confidence to 0.7.",
+                self.model_id,
+                self.confidence,
+                self.probability,
+            )
+            self.confidence = 0.7
+        return self

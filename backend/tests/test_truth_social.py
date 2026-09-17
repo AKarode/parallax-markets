@@ -98,14 +98,18 @@ class TestFetchTruthSocial:
             },
         ])
 
-        # Pre-compute the hash that would be generated for this URL
-        import hashlib
-        url = "https://truthsocial.com/@realDonaldTrump/posts/12345"
-        expected_hash = hashlib.md5(url.encode()).hexdigest()
+        # Pre-compute the hash using new title+canonical-URL sha256 logic
+        from parallax.ingestion.google_news import NewsEvent
+        seen_event = NewsEvent(
+            title="Iran ceasefire happening now",
+            url="https://truthsocial.com/@realDonaldTrump/posts/12345",
+            source="truth_social",
+            published_at=now,
+        )
 
         result = await fetch_truth_social(
             accounts=["realDonaldTrump"],
-            seen_hashes={expected_hash},
+            seen_hashes={seen_event.event_hash},
         )
         assert result == []
 

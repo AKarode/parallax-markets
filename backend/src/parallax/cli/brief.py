@@ -469,12 +469,13 @@ def _persist_market_prices(
 OIL_CONFLICT_TICKERS = {"KXWTIMAX-26DEC31", "KXWTIMIN-26DEC31"}
 
 
-def _deconflict_oil_signals(signals: list) -> None:
+def _deconflict_oil_signals(signals: list, ledger: SignalLedger | None = None) -> None:
     """Suppress conflicting oil signals from the same model.
 
     If oil_price generates tradable signals on both KXWTIMAX (bullish) and
     KXWTIMIN (bearish), keep only the one with the highest effective edge.
-    The loser gets downgraded to HOLD so it stays in the ledger for auditing.
+    The loser gets downgraded to HOLD in both memory AND the signal_ledger
+    DB row so downstream readers (get_actionable_signals) honor the suppression.
     """
     oil_tradable = [
         s for s in signals
@@ -488,14 +489,55 @@ def _deconflict_oil_signals(signals: list) -> None:
     best = max(oil_tradable, key=lambda s: abs(s.effective_edge or 0.0))
     for s in oil_tradable:
         if s.signal_id != best.signal_id:
-            s.signal = "HOLD"
-            s.reason = (
+            reason = (
                 f"Deconflicted: suppressed in favor of {best.contract_ticker} "
                 f"(edge {best.effective_edge:.1%} vs {s.effective_edge:.1%})"
             )
+            s.signal = "HOLD"
+            s.trade_refused_reason = reason
+            if ledger is not None:
+                ledger.update_signal_action(s.signal_id, "HOLD", trade_refused_reason=reason)
             logger.info(
                 "Oil deconflict: suppressed %s in favor of %s",
                 s.contract_ticker, best.contract_ticker,
+            )
+
+
+def _deconflict_by_ticker(signals: list, ledger: SignalLedger | None = None) -> None:
+    """Suppress duplicate tradable signals on the same contract_ticker.
+
+    Multiple models (e.g. oil_price + ceasefire) can map to the same contract
+    and produce conflicting/duplicate exposure. Keep only the signal with the
+    highest abs(effective_edge) per ticker; mark losers HOLD in memory + DB.
+    """
+    by_ticker: dict[str, list] = {}
+    for s in signals:
+        ticker = getattr(s, "contract_ticker", None)
+        if ticker is None:
+            continue
+        if s.signal not in ("BUY_YES", "BUY_NO"):
+            continue
+        by_ticker.setdefault(ticker, []).append(s)
+
+    for ticker, group in by_ticker.items():
+        if len(group) <= 1:
+            continue
+        best = max(group, key=lambda s: abs(s.effective_edge or 0.0))
+        for s in group:
+            if s.signal_id == best.signal_id:
+                continue
+            reason = (
+                f"Cross-model deconflicted on {ticker}: kept {best.model_id} "
+                f"(edge {(best.effective_edge or 0.0):.1%}) over {s.model_id} "
+                f"(edge {(s.effective_edge or 0.0):.1%})"
+            )
+            s.signal = "HOLD"
+            s.trade_refused_reason = reason
+            if ledger is not None:
+                ledger.update_signal_action(s.signal_id, "HOLD", trade_refused_reason=reason)
+            logger.info(
+                "Cross-model deconflict on %s: suppressed %s in favor of %s",
+                ticker, s.model_id, best.model_id,
             )
 
 
@@ -517,7 +559,7 @@ def _load_portfolio_state(conn: duckdb.DuckDBPyConnection) -> PortfolioState:
     pnl_row = conn.execute("""
         SELECT COALESCE(SUM(realized_pnl), 0.0)
         FROM trade_positions
-        WHERE closed_at >= CURRENT_DATE
+        WHERE closed_at >= CURRENT_DATE AT TIME ZONE 'UTC'
     """).fetchone()
     daily_pnl = float(pnl_row[0]) if pnl_row else 0.0
     return PortfolioState(positions=positions, daily_realized_pnl=daily_pnl)
@@ -711,7 +753,10 @@ async def run_brief(
     # Deconflict oil contracts: don't let one oil_price prediction generate
     # tradable signals on both KXWTIMAX (bullish) and KXWTIMIN (bearish).
     # Keep only the signal with the highest effective edge.
-    _deconflict_oil_signals(all_signals)
+    _deconflict_oil_signals(all_signals, ledger)
+    # Cross-model deconfliction: prevent doubled exposure when two different
+    # models (e.g. oil_price + ceasefire) map to the same contract_ticker.
+    _deconflict_by_ticker(all_signals, ledger)
 
     trade_journal: list[dict] = []
     if not dry_run and not no_trade:
@@ -723,7 +768,7 @@ async def run_brief(
             risk_limits = load_risk_limits()
             allocator = PortfolioAllocator(risk_limits)
             portfolio_state = _load_portfolio_state(conn)
-            for signal in ledger.get_actionable_signals():
+            for signal in ledger.get_actionable_signals(run_id=run_id):
                 if signal.entry_price is None or signal.entry_side is None:
                     continue
                 proposed = ProposedTrade(
@@ -861,12 +906,17 @@ async def _fetch_gdelt_events() -> list[dict]:
     from parallax.ingestion.truth_social import fetch_truth_social
 
     events = []
+    # Per-fetcher dedup sets to avoid races on a shared mutable set during
+    # asyncio.gather. Cross-fetcher dedup is applied after gather completes.
+    google_seen: set[str] = set()
+    gdelt_seen: set[str] = set()
+    truth_seen: set[str] = set()
     seen: set[str] = set()
     try:
         google_news, gdelt_events, truth_events = await asyncio.gather(
-            fetch_google_news(seen_hashes=seen),
-            fetch_gdelt_docs(timespan="24h", seen_hashes=seen),
-            fetch_truth_social(seen_hashes=seen),
+            fetch_google_news(seen_hashes=google_seen),
+            fetch_gdelt_docs(timespan="24h", seen_hashes=gdelt_seen),
+            fetch_truth_social(seen_hashes=truth_seen),
             return_exceptions=True,
         )
         if isinstance(google_news, list):

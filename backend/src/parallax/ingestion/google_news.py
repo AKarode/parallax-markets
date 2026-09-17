@@ -8,14 +8,54 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+import string
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Query params that uniquely identify content (e.g., article IDs); all others are stripped.
+_CONTENT_BEARING_QUERY_KEYS = {"id", "story_id", "article_id", "p", "v", "q"}
+
+# Pre-compiled regex to collapse whitespace runs inside titles before hashing.
+_WHITESPACE_RE = re.compile(r"\s+")
+# Translation table that drops standard ASCII punctuation; Unicode punctuation is
+# preserved (rare in titles, and stripping it risks merging distinct headlines).
+_PUNCT_TRANSLATION = str.maketrans("", "", string.punctuation)
+
+
+def _normalize_title_for_hash(title: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace for stable hashing."""
+    lowered = title.lower().translate(_PUNCT_TRANSLATION)
+    return _WHITESPACE_RE.sub(" ", lowered).strip()
+
+
+def _canonicalize_url_for_hash(url: str) -> str:
+    """Strip tracking params, fragments, lowercase host; keep content-identifying query keys."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return url.strip().lower()
+
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=False)
+        if k.lower() in _CONTENT_BEARING_QUERY_KEYS
+    ]
+    kept.sort()
+    new_query = urlencode(kept)
+    # Drop fragment, lowercase scheme + host, trim trailing slash from path.
+    path = parts.path.rstrip("/") if parts.path != "/" else parts.path
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc.lower(), path, new_query, "")
+    )
+
 
 # RSS feed URLs for Iran/Hormuz/oil topics
 FEED_QUERIES = [
@@ -43,7 +83,15 @@ class NewsEvent:
 
     def __post_init__(self):
         if not self.event_hash:
-            self.event_hash = hashlib.md5(self.url.encode()).hexdigest()
+            # Combine normalized title + canonical URL so republished articles with
+            # the same URL but different framing don't collide, and URL redirects
+            # that only change tracking params still dedupe correctly.
+            payload = (
+                _normalize_title_for_hash(self.title)
+                + "|"
+                + _canonicalize_url_for_hash(self.url)
+            )
+            self.event_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _build_rss_url(query: str) -> str:
