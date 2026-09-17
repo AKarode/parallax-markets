@@ -48,3 +48,8 @@ test-results/
 # Misc
 *.log
 *.pem
+
+# Local run artifacts (probe DBs, dry-run DuckDB, console logs)
+data/
+*.sqlite
+*.jsonl
