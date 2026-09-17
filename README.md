@@ -2,7 +2,11 @@
 
 A prediction-market research platform for geopolitical events — built to answer one question rigorously: **can an LLM reasoning system find and profitably trade mispriced prediction-market contracts?**
 
-> **Status: research concluded (June 2026). The answer — from live paper trading, a synthetic backtest, and a structural-arbitrage probe — was no.** The full record — hypothesis, experiments, root causes, and what survives — is in [docs/POSTMORTEM.md](docs/POSTMORTEM.md). No real capital was ever risked; the thesis was falsified for about $40 of API calls. The strategy failed; the engineering and the evaluation methodology are the product.
+> **Status: active — cross-venue arbitrage (September 2026). The original thesis is dead and stays dead.**
+>
+> Phase 1 (March–June 2026) asked whether an LLM reasoning system could find and profitably trade mispriced contracts. Four experiments said no, for about $40 of API calls and no real capital. That record is preserved in [docs/POSTMORTEM.md](docs/POSTMORTEM.md) — it is evidence, not discouragement.
+>
+> Phase 2 asks a different question, one that needs no forecasting edge: **do Kalshi and Polymarket ever price the same event inconsistently enough to clear both venues' fees?** The new `parallax.arb` package measures exactly that. Nothing there trades; it reports what was quotable.
 
 Parallax ingested real-time news and economic data during the 2026 Iran–Hormuz crisis, ran ensemble LLM predictions informed by a physical supply-chain cascade simulation, compared model probabilities against live Kalshi/Polymarket prices, and paper-traded the divergences with full execution semantics.
 
@@ -27,7 +31,7 @@ Parallax ingested real-time news and economic data during the 2026 Iran–Hormuz
                                                                  └──────────────────┘
 ```
 
-## Findings
+## Findings — Phase 1
 
 The later experiments ran with pre-registered kill criteria; every headline number below is traceable to a report in `docs/`.
 
@@ -91,27 +95,34 @@ backend/src/parallax/
     data.py                   Query layer for React dashboard
   db/
     schema.py                 DuckDB schema (20+ tables)
-
-frontend/                     React + Vite + TypeScript dashboard
+  arb/                        PHASE 2 — cross-venue arbitrage measurement
+    venue.py                  Venue protocol (read-only, outcome-addressed)
+    adapters.py               KalshiVenue / PolymarketVenue over the clients
+    fees.py                   Exact per-venue fee models (Decimal)
+    pairs.py                  Settlement-equivalence registry, review-gated
+    scanner.py                Package accounting across both ask ladders
 ```
+
+The React dashboard that served Phase 1 was removed in September 2026 — it was
+68% of the repository and has no role in an arbitrage scanner. It remains in
+git history.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Backend | Python 3.12, FastAPI, DuckDB |
+| Backend | Python 3.11+, FastAPI, DuckDB |
 | AI | Claude (3× ensemble calls per prediction, $20/day budget enforcement) |
-| Frontend | React 18, TypeScript, Vite, deck.gl, MapLibre GL |
 | Data | Google News RSS, GDELT, EIA API v2, Kalshi API, Polymarket API |
 | Geo | H3 hexagonal indexing, Shapely, Searoute |
-| Testing | pytest (535 tests), pytest-asyncio, pytest-httpx |
+| Testing | pytest, pytest-asyncio, pytest-httpx |
 | Ops | Docker Compose, systemd timers (unattended twice-daily runs) |
 
 ## Quick Start
 
 ```bash
 cd backend
-pip install -e ".[dev]"
+uv sync --extra dev          # or: pip install -e ".[dev]"
 
 # Set environment variables
 export ANTHROPIC_API_KEY=your-key
@@ -138,11 +149,30 @@ python -m parallax.cli.kalshibench --models haiku --limit 60   # cheap smoke tes
 ## Testing
 
 ```bash
-cd backend && python -m pytest tests/
+cd backend
+uv run --extra dev --extra bench pytest -q
 ```
 
-535 tests covering ensemble aggregation, cascade modeling, contract mapping, signal evaluation, calibration, resolution backfill, and the paper-trade lifecycle.
+**Current state, measured 2026-09-17: 523 passed, 24 failed, 13 skipped.**
+
+The 24 failures are pre-existing and confined to the Phase 1 research pipeline
+— `test_scorecard.py` (10), `test_phase1_critical.py` (4),
+`test_crisis_context_db.py` (4), `test_brief_resilience.py` (3), and one each
+in `test_selective.py`, `test_ops_events.py`, `test_llm_usage.py`. They are
+mostly DuckDB schema drift against tables the concluded experiment wrote.
+
+Nothing under `markets/`, `contracts/`, `divergence/` or `arb/` is failing, so
+the Phase 2 path is green. The failures are still real debt and are not being
+described as anything else.
+
+Note that the `bench` extra is required for collection — without numpy, four
+test modules fail at import and pytest reports a collection error rather than
+a test result.
 
 ## Project History
 
 Built March–June 2026 (~16k LOC, 244 commits) against a live geopolitical crisis with a hard two-week validation deadline. Ran unattended on a VPS for the duration. See [docs/POSTMORTEM.md](docs/POSTMORTEM.md) for the full arc: what was hypothesized, what the four experiments showed, why the edge thesis failed, and which components are reusable.
+
+Reopened September 2026 to ask the cross-venue question. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together
+and [docs/ONBOARDING.md](docs/ONBOARDING.md) to get running.
