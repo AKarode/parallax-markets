@@ -103,7 +103,7 @@ def aurc(probs, labels) -> float:
     coverage, risk = risk_coverage_curve(probs, labels)
     if coverage.size < 2:
         return float("nan")
-    return float(np.trapz(risk, coverage))
+    return float(np.trapezoid(risk, coverage))
 
 
 def operating_threshold(probs, labels, target_error: float) -> float:
